@@ -1,49 +1,80 @@
 const axios = require("axios");
 const UserAgent = require("user-agents");
 const TelegramBot = require("node-telegram-bot-api");
+const express = require("express");
 
 // ==========================================
-// التوكن من متغيرات البيئة (للأمان)
+// الإعدادات
 // ==========================================
-const TOKEN = process.env.TOKEN;
+const TOKEN = process.env.BOT_TOKEN;
+const PORT = process.env.PORT || 3000;
+const URL = process.env.RAILWAY_STATIC_URL; // مهم في Railway
+
 if (!TOKEN) {
-  console.error("❌ الرجاء تعيين متغير البيئة TOKEN");
+  console.error("❌ BOT_TOKEN غير موجود");
   process.exit(1);
 }
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+if (!URL) {
+  console.error("❌ RAILWAY_STATIC_URL غير موجود");
+  process.exit(1);
+}
 
 // ==========================================
-// دالة التحقق من Luhn (اختياري، يمكن الاحتفاظ بها)
+// إنشاء البوت + السيرفر
+// ==========================================
+const bot = new TelegramBot(TOKEN);
+const app = express();
+
+app.use(express.json());
+
+// ==========================================
+// Webhook
+// ==========================================
+const webhookPath = `/bot${TOKEN}`;
+
+bot.setWebHook(`${URL}${webhookPath}`);
+
+app.post(webhookPath, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// ==========================================
+// Luhn check
 // ==========================================
 function checkLuhn(card) {
+  if (!/^\d+$/.test(card)) return false;
+
   let sum = 0;
   let alt = false;
+
   for (let i = card.length - 1; i >= 0; i--) {
     let num = parseInt(card[i]);
+
     if (alt) {
       num *= 2;
       if (num > 9) num -= 9;
     }
+
     sum += num;
     alt = !alt;
   }
+
   return sum % 10 === 0;
 }
 
 // ==========================================
-// دالة فحص البطاقة عبر الـ API
+// فحص البطاقة
 // ==========================================
-async function checkCard(cardString, chatId, bot) {
-  // cardString مثال: "4111111111111111|01|2031|123"
-  // يمكن إجراء التحقق من Luhn قبل الإرسال (اختياري)
-  const cardNumber = cardString.split("|")[0];
-  if (cardNumber && !checkLuhn(cardNumber)) {
-    await bot.sendMessage(chatId, "❌ رقم البطاقة غير صالح (فشل Luhn).");
-    return;
-  }
-
+async function checkCard(cardString, chatId) {
   try {
+    const cardNumber = cardString.split("|")[0];
+
+    if (!cardNumber || !checkLuhn(cardNumber)) {
+      return bot.sendMessage(chatId, "❌ رقم البطاقة غير صالح");
+    }
+
     const res = await axios.post(
       "https://api.chkr.cc/",
       { data: cardString },
@@ -56,36 +87,26 @@ async function checkCard(cardString, chatId, bot) {
       }
     );
 
-    const data = res.data;
+    const data = res.data || {};
+
     const msg = data.message || "لا توجد رسالة";
     const status = data.status || "غير معروف";
 
+    const text = `
+💳 ${cardString}
+📊 ${status}
+💬 ${msg}
+`;
+
     if (data.code === 1) {
-      // بطاقة مقبولة (HIT)
-      const successText = `
-✅ **تم العثور على بطاقة صالحة**
-━━━━━━━━━━━━━━
-💳 \`${cardString}\`
-📊 ${status}
-💬 ${msg}
-━━━━━━━━━━━━━━
-`;
-      await bot.sendMessage(chatId, successText, { parse_mode: "Markdown" });
+      await bot.sendMessage(chatId, "✅ VALID\n" + text);
     } else {
-      // بطاقة مرفوضة (BAD)
-      const failText = `
-❌ **البطاقة مرفوضة**
-━━━━━━━━━━━━━━
-💳 \`${cardString}\`
-📊 ${status}
-💬 ${msg}
-━━━━━━━━━━━━━━
-`;
-      await bot.sendMessage(chatId, failText, { parse_mode: "Markdown" });
+      await bot.sendMessage(chatId, "❌ INVALID\n" + text);
     }
+
   } catch (err) {
-    console.error(err);
-    await bot.sendMessage(chatId, "⚠️ حدث خطأ أثناء الاتصال بـ API. حاول لاحقاً.");
+    console.error("❌ API ERROR:", err.message);
+    bot.sendMessage(chatId, "⚠️ فشل الاتصال بالسيرفر");
   }
 }
 
@@ -93,46 +114,44 @@ async function checkCard(cardString, chatId, bot) {
 // أوامر البوت
 // ==========================================
 bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
   bot.sendMessage(
-    chatId,
-    `✨ مرحباً بك في بوت فحص البطاقات ✨
+    msg.chat.id,
+    `✨ مرحباً ✨
 
-أرسل لي رقم البطاقة بالصيغة التالية:
-\`رقم|شهر|سنة|cvv\`
-
-مثال:
-\`4111111111111111|01|2031|123\`
-
-وسأقوم بالتحقق منها عبر الخدمة.`,
-    { parse_mode: "Markdown" }
+أرسل البطاقة بهذا الشكل:
+4111111111111111|01|2031|123`
   );
 });
 
-// معالجة أي رسالة نصية (تعتبر بطاقة)
+// ==========================================
+// استقبال الرسائل
+// ==========================================
 bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
+  if (!msg.text) return;
 
-  // تجاهل الأوامر التي تبدأ بـ /
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+
   if (text.startsWith("/")) return;
 
-  // التأكد من أن النص يحتوي على 4 أجزاء على الأقل (رقم|شهر|سنة|cvv)
   const parts = text.split("|");
-  if (parts.length < 4) {
-    await bot.sendMessage(
-      chatId,
-      "⚠️ الصيغة غير صحيحة.\nأرسل البطاقة بهذا الشكل:\n`4111111111111111|01|2031|123`",
-      { parse_mode: "Markdown" }
-    );
-    return;
+
+  if (parts.length !== 4) {
+    return bot.sendMessage(chatId, "❌ الصيغة غلط");
   }
 
-  // إرسال رسالة "جاري التحقق..."
-  await bot.sendMessage(chatId, "⏳ جاري فحص البطاقة...");
+  await bot.sendMessage(chatId, "⏳ جاري الفحص...");
 
-  // تنفيذ الفحص
-  await checkCard(text, chatId, bot);
+  await checkCard(text, chatId);
 });
 
-console.log("✅ البوت يعمل الآن...");
+// ==========================================
+// تشغيل السيرفر
+// ==========================================
+app.get("/", (req, res) => {
+  res.send("🤖 Bot is running");
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
