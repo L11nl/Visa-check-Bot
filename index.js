@@ -1,8 +1,7 @@
 const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
 
 const TOKEN = process.env.TOKEN;
 if (!TOKEN) {
@@ -13,53 +12,122 @@ if (!TOKEN) {
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 // ==========================================
-// إعداد قاعدة البيانات
+// إعداد قاعدة بيانات JSON بسيطة
 // ==========================================
-const dbPath = path.join(__dirname, 'data', 'subscriptions.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+const DATA_FILE = path.join(__dirname, 'data.json');
 
-const db = new sqlite3.Database(dbPath);
+function loadData() {
+    if (!fs.existsSync(DATA_FILE)) return { subscribers: {}, campaigns: {}, pendingPayments: [], paymentProofs: [] };
+    try {
+        return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    } catch(e) { return { subscribers: {}, campaigns: {}, pendingPayments: [], paymentProofs: [] }; }
+}
 
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS subscribers (
-        user_id INTEGER PRIMARY KEY,
-        plan TEXT DEFAULT 'free',
-        start_date TEXT,
-        end_date TEXT,
-        campaigns_limit INTEGER DEFAULT 1,
-        cards_limit INTEGER DEFAULT 10,
-        active INTEGER DEFAULT 1
-    )`);
-    db.run(`CREATE TABLE IF NOT EXISTS campaigns (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        bin TEXT,
-        total INTEGER,
-        current INTEGER DEFAULT 0,
-        hit INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'running',
-        created_at TEXT
-    )`);
-    db.run(`CREATE TABLE IF NOT EXISTS pending_payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        plan TEXT,
-        amount REAL,
-        code TEXT,
-        status TEXT DEFAULT 'waiting_payment',
-        created_at TEXT
-    )`);
-    db.run(`CREATE TABLE IF NOT EXISTS payment_proofs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        plan TEXT,
-        photo_file_id TEXT,
-        message_id INTEGER,
-        status TEXT DEFAULT 'pending',
-        created_at TEXT
-    )`);
-});
+function saveData(data) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+// دوال مساعدة للتعامل مع البيانات
+function getSubscriber(userId) {
+    const data = loadData();
+    if (!data.subscribers[userId]) {
+        data.subscribers[userId] = {
+            plan: 'free',
+            startDate: new Date().toISOString(),
+            endDate: new Date(Date.now() + 365*24*60*60*1000).toISOString(),
+            campaignsLimit: 1,
+            cardsLimit: 10
+        };
+        saveData(data);
+    }
+    // التحقق من انتهاء الاشتراك
+    const sub = data.subscribers[userId];
+    if (sub.plan !== 'free' && new Date(sub.endDate) < new Date()) {
+        sub.plan = 'free';
+        sub.campaignsLimit = 1;
+        sub.cardsLimit = 10;
+        sub.startDate = new Date().toISOString();
+        sub.endDate = new Date(Date.now() + 365*24*60*60*1000).toISOString();
+        saveData(data);
+    }
+    return data.subscribers[userId];
+}
+
+function updateSubscriber(userId, updates) {
+    const data = loadData();
+    data.subscribers[userId] = { ...data.subscribers[userId], ...updates };
+    saveData(data);
+}
+
+function getUserActiveCampaigns(userId) {
+    const data = loadData();
+    return Object.values(data.campaigns).filter(c => c.userId === userId && c.status === 'running');
+}
+
+function createCampaign(userId, bin, total) {
+    const data = loadData();
+    const id = Date.now() + Math.random();
+    data.campaigns[id] = {
+        id, userId, bin, total, current: 0, hit: 0, status: 'running', createdAt: new Date().toISOString()
+    };
+    saveData(data);
+    return id;
+}
+
+function updateCampaign(campaignId, current, hit, status) {
+    const data = loadData();
+    if (data.campaigns[campaignId]) {
+        if (current !== undefined) data.campaigns[campaignId].current = current;
+        if (hit !== undefined) data.campaigns[campaignId].hit = hit;
+        if (status !== undefined) data.campaigns[campaignId].status = status;
+        saveData(data);
+    }
+}
+
+function createPendingPayment(userId, plan, code) {
+    const data = loadData();
+    data.pendingPayments.push({
+        id: Date.now() + Math.random(),
+        userId, plan, amount: PLANS[plan].price, code, status: 'waiting_payment', createdAt: new Date().toISOString()
+    });
+    saveData(data);
+    return data.pendingPayments[data.pendingPayments.length-1];
+}
+
+function getPendingPayment(userId, plan) {
+    const data = loadData();
+    return data.pendingPayments.find(p => p.userId === userId && p.plan === plan && p.status === 'waiting_payment');
+}
+
+function updatePendingPayment(id, status) {
+    const data = loadData();
+    const idx = data.pendingPayments.findIndex(p => p.id === id);
+    if (idx !== -1) data.pendingPayments[idx].status = status;
+    saveData(data);
+}
+
+function createPaymentProof(userId, plan, photoFileId, messageId) {
+    const data = loadData();
+    const proof = {
+        id: Date.now() + Math.random(),
+        userId, plan, photoFileId, messageId, status: 'pending', createdAt: new Date().toISOString()
+    };
+    data.paymentProofs.push(proof);
+    saveData(data);
+    return proof;
+}
+
+function getPaymentProof(id) {
+    const data = loadData();
+    return data.paymentProofs.find(p => p.id === id);
+}
+
+function updatePaymentProof(id, status) {
+    const data = loadData();
+    const idx = data.paymentProofs.findIndex(p => p.id === id);
+    if (idx !== -1) data.paymentProofs[idx].status = status;
+    saveData(data);
+}
 
 // ==========================================
 // المتغيرات العامة
@@ -69,32 +137,13 @@ const adminSet = new Set([643309456]);
 const guessState = new Map();
 
 const PLANS = {
-    free: { name: 'مجاني', price: 0, cardsLimit: 10, campaignsLimit: 1, months: 0 },
-    plus: { name: 'Plus', price: 3, cardsLimit: 70, campaignsLimit: 3, months: 1 },
-    pro: { name: 'Pro', price: 5, cardsLimit: 150, campaignsLimit: 5, months: 1 },
-    vip: { name: 'VIP', price: 8, cardsLimit: 350, campaignsLimit: 7, months: 1 }
+    free: { name: 'مجاني', price: 0, cardsLimit: 10, campaignsLimit: 1 },
+    plus: { name: 'Plus', price: 3, cardsLimit: 70, campaignsLimit: 3 },
+    pro: { name: 'Pro', price: 5, cardsLimit: 150, campaignsLimit: 5 },
+    vip: { name: 'VIP', price: 8, cardsLimit: 350, campaignsLimit: 7 }
 };
 
 const BINANCE_PAY_ID = '842505320';
-
-// ==========================================
-// دوال قاعدة البيانات (متزامنة باستخدام Promise)
-// ==========================================
-function dbGet(sql, params) {
-    return new Promise((resolve, reject) => {
-        db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); });
-    });
-}
-function dbRun(sql, params) {
-    return new Promise((resolve, reject) => {
-        db.run(sql, params, function(err) { if (err) reject(err); else resolve(this); });
-    });
-}
-function dbAll(sql, params) {
-    return new Promise((resolve, reject) => {
-        db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows); });
-    });
-}
 
 // ==========================================
 // دوال مساعدة (Luhn, توليد، أعلام)
@@ -219,7 +268,7 @@ function getCopyButtons(fullCard) {
 }
 
 // ==========================================
-// الترجمات الكاملة (عربي فقط للاختصار، يمكن إضافة الإنجليزي)
+// الترجمات (عربية)
 // ==========================================
 const t = {
     ar: {
@@ -258,51 +307,12 @@ const t = {
         no_active_campaigns: '⚠️ لا توجد حملات نشطة.',
         active_campaigns: '📋 *حملاي النشطة*\n'
     }
-    // يمكن إضافة en بنفس الهيكل
 };
 
 // ==========================================
-// دوال إدارة المستخدمين والحملات (async)
-// ==========================================
-async function getUserPlan(userId) {
-    let row = await dbGet(`SELECT * FROM subscribers WHERE user_id = ?`, [userId]);
-    if (!row) {
-        await dbRun(`INSERT INTO subscribers (user_id, plan, start_date, end_date, campaigns_limit, cards_limit) VALUES (?, 'free', datetime('now'), datetime('now', '+1 year'), 1, 10)`, [userId]);
-        return { plan: 'free', campaigns_limit: 1, cards_limit: 10 };
-    }
-    if (row.plan !== 'free' && new Date(row.end_date) < new Date()) {
-        await dbRun(`UPDATE subscribers SET plan = 'free', campaigns_limit = 1, cards_limit = 10, start_date = datetime('now'), end_date = datetime('now', '+1 year') WHERE user_id = ?`, [userId]);
-        return { plan: 'free', campaigns_limit: 1, cards_limit: 10 };
-    }
-    return row;
-}
-
-async function getUserActiveCampaigns(userId) {
-    return await dbAll(`SELECT * FROM campaigns WHERE user_id = ? AND status = 'running'`, [userId]);
-}
-
-async function createCampaign(userId, bin, total) {
-    const result = await dbRun(`INSERT INTO campaigns (user_id, bin, total, created_at) VALUES (?, ?, ?, datetime('now'))`, [userId, bin, total]);
-    return result.lastID;
-}
-
-async function updateCampaign(campaignId, current, hit, status) {
-    await dbRun(`UPDATE campaigns SET current = ?, hit = ?, status = ? WHERE id = ?`, [current, hit, status, campaignId]);
-}
-
-async function deleteCampaign(campaignId) {
-    await dbRun(`DELETE FROM campaigns WHERE id = ?`, [campaignId]);
-}
-
-async function createPendingPayment(userId, plan, code) {
-    await dbRun(`INSERT INTO pending_payments (user_id, plan, amount, code, created_at) VALUES (?, ?, ?, ?, datetime('now'))`, [userId, plan, PLANS[plan].price, code]);
-}
-
-// ==========================================
-// تشغيل حملة (تخمين)
+// دوال إدارة الحملات والتخمين
 // ==========================================
 async function runCampaign(chatId, campaignId, bin, total) {
-    const lang = 'ar'; // للتبسيط، يمكن جلبها من userLang
     const dict = t.ar;
     let progressMsg = await bot.sendMessage(chatId, dict.generating.replace('{current}',0).replace('{total}',total).replace('{dots}','.').replace('{bin}',bin));
     let hit = 0;
@@ -310,7 +320,7 @@ async function runCampaign(chatId, campaignId, bin, total) {
         const state = guessState.get(chatId);
         if (state && state.cancelFlag) {
             await bot.sendMessage(chatId, dict.cancel_msg);
-            await updateCampaign(campaignId, i-1, hit, 'cancelled');
+            updateCampaign(campaignId, i-1, hit, 'cancelled');
             try { await bot.deleteMessage(chatId, progressMsg.message_id); } catch(e) {}
             guessState.delete(chatId);
             return;
@@ -327,7 +337,7 @@ async function runCampaign(chatId, campaignId, bin, total) {
             const buttons = getCopyButtons(fullVisa);
             await bot.sendMessage(chatId, liveText, { parse_mode: 'Markdown', ...buttons });
         }
-        await updateCampaign(campaignId, i, hit, 'running');
+        updateCampaign(campaignId, i, hit, 'running');
     }
     try { await bot.deleteMessage(chatId, progressMsg.message_id); } catch(e) {}
     if (hit === 0) {
@@ -337,19 +347,20 @@ async function runCampaign(chatId, campaignId, bin, total) {
     } else {
         await bot.sendMessage(chatId, dict.summary.replace('{hit}',hit).replace('{total}',total));
     }
-    await updateCampaign(campaignId, total, hit, 'completed');
+    updateCampaign(campaignId, total, hit, 'completed');
     guessState.delete(chatId);
 }
 
 async function startNewCampaign(chatId, bin, total) {
-    const planData = await getUserPlan(chatId);
-    const campaignsLimit = PLANS[planData.plan].campaignsLimit;
-    const active = await getUserActiveCampaigns(chatId);
+    const subscriber = getSubscriber(chatId);
+    const planName = subscriber.plan;
+    const campaignsLimit = PLANS[planName].campaignsLimit;
+    const active = getUserActiveCampaigns(chatId);
     if (active.length >= campaignsLimit) {
         await bot.sendMessage(chatId, t.ar.campaigns_limit_reached.replace('{limit}', campaignsLimit));
         return;
     }
-    const campaignId = await createCampaign(chatId, bin, total);
+    const campaignId = createCampaign(chatId, bin, total);
     await runCampaign(chatId, campaignId, bin, total);
 }
 
@@ -358,15 +369,15 @@ async function startNewCampaign(chatId, bin, total) {
 // ==========================================
 async function handleSubscription(chatId, plan) {
     const code = generateRandomCode();
-    await createPendingPayment(chatId, plan, code);
+    createPendingPayment(chatId, plan, code);
     const text = t.ar.subscribe_confirm.replace('{plan}',plan.toUpperCase()).replace('{amount}',PLANS[plan].price).replace('{payId}',BINANCE_PAY_ID).replace('{code}',code);
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     // بعد 15 ثانية نرسل رسالة فشل إذا لم يرسل صورة
     setTimeout(async () => {
-        const pending = await dbGet(`SELECT * FROM pending_payments WHERE user_id = ? AND plan = ? AND status = 'waiting_payment'`, [chatId, plan]);
-        if (pending) {
-            await bot.sendMessage(chatId, t.ar.api_error); // أو رسالة فشل
-            await dbRun(`UPDATE pending_payments SET status = 'expired' WHERE id = ?`, [pending.id]);
+        const pending = getPendingPayment(chatId, plan);
+        if (pending && pending.status === 'waiting_payment') {
+            await bot.sendMessage(chatId, t.ar.api_error);
+            updatePendingPayment(pending.id, 'expired');
         }
     }, 15000);
 }
@@ -407,7 +418,7 @@ async function showSubscriptionMenu(chatId) {
 
 async function showMyCampaigns(chatId) {
     const dict = t.ar;
-    const campaigns = await getUserActiveCampaigns(chatId);
+    const campaigns = getUserActiveCampaigns(chatId);
     if (campaigns.length === 0) {
         await bot.sendMessage(chatId, dict.no_active_campaigns);
         return;
@@ -443,7 +454,6 @@ bot.onText(/\/cancel/, async (msg) => {
     else await bot.sendMessage(chatId, '⚠️ لا توجد عملية نشطة.');
 });
 
-// أوامر الأدمن (بسيطة)
 bot.onText(/\/addadmin (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, t.ar.not_admin); return; }
@@ -535,35 +545,39 @@ bot.on('callback_query', async (query) => {
 
     // إيقاف حملة
     if (data.startsWith('stop_camp_')) {
-        const campId = parseInt(data.split('_')[2]);
-        await updateCampaign(campId, null, null, 'stopped');
+        const campId = parseFloat(data.split('_')[2]);
+        updateCampaign(campId, null, null, 'stopped');
         await bot.sendMessage(chatId, dict.campaign_stopped.replace('{id}', campId));
         await showMyCampaigns(chatId);
         return;
     }
 
-    // قبول/رفض الدفع من الأدمن (سنضيفها لاحقاً)
+    // قبول/رفض الدفع من الأدمن
     if (data.startsWith('approve_payment_') || data.startsWith('reject_payment_')) {
         if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, dict.not_admin); return; }
         const parts = data.split('_');
         const action = parts[0];
-        const proofId = parseInt(parts[2]);
-        const proof = await dbGet(`SELECT * FROM payment_proofs WHERE id = ?`, [proofId]);
+        const proofId = parseFloat(parts[2]);
+        const proof = getPaymentProof(proofId);
         if (proof) {
             if (action === 'approve') {
                 const end = new Date();
                 end.setMonth(end.getMonth() + 1);
-                await dbRun(`UPDATE subscribers SET plan = ?, start_date = datetime('now'), end_date = ?, campaigns_limit = ?, cards_limit = ? WHERE user_id = ?`, 
-                    [proof.plan, end.toISOString(), PLANS[proof.plan].campaignsLimit, PLANS[proof.plan].cardsLimit, proof.user_id]);
-                await dbRun(`UPDATE payment_proofs SET status = 'approved' WHERE id = ?`, [proofId]);
-                await dbRun(`UPDATE pending_payments SET status = 'approved' WHERE user_id = ? AND plan = ?`, [proof.user_id, proof.plan]);
-                await bot.sendMessage(proof.user_id, t.ar.payment_approved.replace('{plan}', proof.plan.toUpperCase()));
-                await bot.sendMessage(chatId, `✅ تم تفعيل الاشتراك للمستخدم ${proof.user_id}`);
+                updateSubscriber(proof.userId, {
+                    plan: proof.plan,
+                    startDate: new Date().toISOString(),
+                    endDate: end.toISOString(),
+                    campaignsLimit: PLANS[proof.plan].campaignsLimit,
+                    cardsLimit: PLANS[proof.plan].cardsLimit
+                });
+                updatePaymentProof(proofId, 'approved');
+                updatePendingPayment(getPendingPayment(proof.userId, proof.plan)?.id, 'approved');
+                await bot.sendMessage(proof.userId, t.ar.payment_approved.replace('{plan}', proof.plan.toUpperCase()));
+                await bot.sendMessage(chatId, `✅ تم تفعيل الاشتراك للمستخدم ${proof.userId}`);
             } else {
-                await dbRun(`UPDATE payment_proofs SET status = 'rejected' WHERE id = ?`, [proofId]);
-                await dbRun(`UPDATE pending_payments SET status = 'rejected' WHERE user_id = ? AND plan = ?`, [proof.user_id, proof.plan]);
-                await bot.sendMessage(proof.user_id, t.ar.payment_rejected);
-                await bot.sendMessage(chatId, `❌ تم رفض الاشتراك للمستخدم ${proof.user_id}`);
+                updatePaymentProof(proofId, 'rejected');
+                await bot.sendMessage(proof.userId, t.ar.payment_rejected);
+                await bot.sendMessage(chatId, `❌ تم رفض الاشتراك للمستخدم ${proof.userId}`);
             }
         }
         return;
@@ -582,17 +596,16 @@ bot.on('message', async (msg) => {
     if (msg.photo) {
         const photo = msg.photo[msg.photo.length-1];
         const fileId = photo.file_id;
-        const pending = await dbGet(`SELECT * FROM pending_payments WHERE user_id = ? AND status = 'waiting_payment' ORDER BY created_at DESC LIMIT 1`, [chatId]);
-        if (pending) {
-            const result = await dbRun(`INSERT INTO payment_proofs (user_id, plan, photo_file_id, message_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))`, 
-                [chatId, pending.plan, fileId, msg.message_id]);
-            const proofId = result.lastID;
-            const caption = `📸 إثبات دفع جديد\nالمستخدم: ${chatId}\nالخطة: ${pending.plan}\nالمبلغ: ${pending.amount} USDT\nالكود: ${pending.code}`;
+        const pending = getPendingPayment(chatId, null); // نبحث عن أول طلب معلق
+        const pendingItem = Object.values(loadData().pendingPayments).find(p => p.userId === chatId && p.status === 'waiting_payment');
+        if (pendingItem) {
+            const proof = createPaymentProof(chatId, pendingItem.plan, fileId, msg.message_id);
+            const caption = `📸 إثبات دفع جديد\nالمستخدم: ${chatId}\nالخطة: ${pendingItem.plan}\nالمبلغ: ${pendingItem.amount} USDT\nالكود: ${pendingItem.code}`;
             const adminKeyboard = {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: '✅ موافقة', callback_data: `approve_payment_${proofId}` }],
-                        [{ text: '❌ رفض', callback_data: `reject_payment_${proofId}` }]
+                        [{ text: '✅ موافقة', callback_data: `approve_payment_${proof.id}` }],
+                        [{ text: '❌ رفض', callback_data: `reject_payment_${proof.id}` }]
                     ]
                 }
             };
@@ -600,7 +613,7 @@ bot.on('message', async (msg) => {
                 await bot.sendPhoto(adminId, fileId, { caption, ...adminKeyboard });
             }
             await bot.sendMessage(chatId, dict.payment_received);
-            await dbRun(`UPDATE pending_payments SET status = 'proof_sent' WHERE id = ?`, [pending.id]);
+            updatePendingPayment(pendingItem.id, 'proof_sent');
         } else {
             await bot.sendMessage(chatId, dict.api_error);
         }
@@ -615,8 +628,8 @@ bot.on('message', async (msg) => {
             while (bin.length < 6) bin += Math.floor(Math.random()*10);
             state.bin = bin;
             state.step = 'awaiting_count';
-            const planData = await getUserPlan(chatId);
-            const maxCards = planData.plan === 'free' ? 10 : PLANS[planData.plan].cardsLimit;
+            const subscriber = getSubscriber(chatId);
+            const maxCards = subscriber.cardsLimit;
             const countMsg = dict.enter_count.replace('{max}', maxCards) + (adminSet.has(chatId) ? dict.admin_unlimited : '');
             const cancelKeyboard = { reply_markup: { inline_keyboard: [[{ text: dict.cancel_btn, callback_data: 'cancel_guess' }]] } };
             await bot.sendMessage(chatId, countMsg, cancelKeyboard);
@@ -627,8 +640,8 @@ bot.on('message', async (msg) => {
     if (state && state.step === 'awaiting_count') {
         const count = parseInt(text);
         if (isNaN(count)) return;
-        const planData = await getUserPlan(chatId);
-        const maxCards = planData.plan === 'free' ? 10 : PLANS[planData.plan].cardsLimit;
+        const subscriber = getSubscriber(chatId);
+        const maxCards = subscriber.cardsLimit;
         if (!adminSet.has(chatId) && (count < 5 || count > maxCards)) {
             await bot.sendMessage(chatId, dict.count_out_of_range.replace('{max}', maxCards));
             return;
@@ -654,4 +667,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('✅ البوت يعمل الآن بشكل كامل مع قاعدة البيانات والاشتراكات.');
+console.log('✅ البوت يعمل الآن بشكل كامل مع تخزين JSON (بدون sqlite3).');
