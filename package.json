@@ -1,10 +1,12 @@
 {
-  "name": "node index.js",
+  "name": "visa-check-bot",
   "version": "1.0.0",
-  "main": "bot.js",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
-    "axios": "^1.6.0",
-    "node-telegram-bot-api": "^0.64.0",
-    "user-agents": "^1.1.0"
+    "axios": "^1.6.2",
+    "node-telegram-bot-api": "^0.64.0"
   }
 }
