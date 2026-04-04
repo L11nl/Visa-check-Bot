@@ -16,13 +16,13 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 // المتغيرات العامة
 // ==========================================
 const userLang = new Map();                // chatId -> 'ar'/'en'
-const adminSet = new Set([643309456]);    // الأدمن الأساسي (رقم معرف المستخدم)
-const guessState = new Map();              // chatId -> { bin, count, cancelFlag }
+const adminSet = new Set([643309456]);    // الأدمن الأساسي
+const guessState = new Map();              // chatId -> { step, bin, count, cancelFlag }
 
 // ==========================================
-// الترجمات (عربي + إنجليزي)
+// الترجمات (عربي + إنجليزي) - محدثة
 // ==========================================
-const t = {
+const translations = {
     ar: {
         choose_lang: 'اختر لغتك / Choose your language:',
         lang_changed: '✅ تم تغيير اللغة إلى العربية',
@@ -30,15 +30,14 @@ const t = {
         btn_guess: '🎲 تخمين مجموعة فيزات',
         btn_single: '🔍 فحص فيزا واحدة',
         cancel_btn: '❌ إلغاء',
-        enter_bin: '📌 أرسل أول 6 أرقام من الفيزا (BIN) مثال: `515462`',
-        invalid_bin: '⚠️ يجب إرسال 6 أرقام فقط (BIN).',
-        enter_count: '🔢 كم عدد الفيزات التي تريد تخمينها؟\n(الحد الأدنى 5، الحد الأقصى 50)',
+        enter_bin: '📌 أرسل الـ BIN الخاص بك (أول 6 أرقام أو أكثر من الفيزا)\nمثال: `515462`',
+        invalid_bin: '⚠️ يجب إرسال أرقام صالحة (على الأقل 6 أرقام).',
+        enter_count: '🔢 كم عدد الفيزات التي تريد تخمينها؟\n(الحد الأدنى 5، الحد الأقصى 50)\nللأدمن: لا يوجد حد أقصى.',
         count_out_of_range: '⚠️ العدد يجب أن يكون بين 5 و 50.',
         count_exceed_admin: '⚠️ العدد المطلوب يتجاوز الحد المسموح (الأدمن فقط يمكنه تجاوز 50).',
         cancel_msg: '❌ تم إلغاء العملية.',
         guessing_start: '🚀 بدء تخمين {count} فيزا... سيتم عرض النتائج فور ظهورها.',
         generating: '🔄 جاري إنشاء الفيزا {current}/{total}...',
-        checking: '⏳ جاري فحص البطاقة...',
         live_result: '✅ **بطاقة صالحة**\n━━━━━━━━━━━━━━\n💳 `{card}`\n📊 الحالة: {status}\n💬 الرسالة: {msg}\n🏦 النوع: {type}\n🌍 البلد: {country}\n━━━━━━━━━━━━━━',
         dead_result: '❌ **بطاقة مرفوضة**\n━━━━━━━━━━━━━━\n💳 `{card}`\n📊 الحالة: {status}\n💬 الرسالة: {msg}\n━━━━━━━━━━━━━━',
         summary: '📊 *الملخص النهائي*\n✅ الصالحة: {hit}\n❌ المرفوضة: {bad}\n🎯 المجموع: {total}',
@@ -51,7 +50,8 @@ const t = {
         admin_added: '✅ تم إضافة أدمن جديد: `{id}`',
         admin_removed: '✅ تم إزالة الأدمن: `{id}`',
         admin_list: '📋 قائمة الأدمن:\n{list}',
-        help_admin: '🔧 أوامر الأدمن:\n/addadmin <id>\n/removeadmin <id>\n/admins'
+        help_admin: '🔧 أوامر الأدمن:\n/addadmin <id>\n/removeadmin <id>\n/admins',
+        no_active: '⚠️ لا توجد عملية نشطة حالياً.'
     },
     en: {
         choose_lang: 'Choose your language / اختر لغتك:',
@@ -60,15 +60,14 @@ const t = {
         btn_guess: '🎲 Guess multiple cards',
         btn_single: '🔍 Check single card',
         cancel_btn: '❌ Cancel',
-        enter_bin: '📌 Send the first 6 digits of the card (BIN) e.g. `515462`',
-        invalid_bin: '⚠️ You must send exactly 6 digits (BIN).',
-        enter_count: '🔢 How many cards to guess?\n(Min 5, Max 50)',
+        enter_bin: '📌 Send your BIN (first 6 digits or more of the card)\nExample: `515462`',
+        invalid_bin: '⚠️ Please send valid numbers (at least 6 digits).',
+        enter_count: '🔢 How many cards to guess?\n(Min 5, Max 50)\nFor admin: no upper limit.',
         count_out_of_range: '⚠️ Count must be between 5 and 50.',
         count_exceed_admin: '⚠️ Requested count exceeds limit (only admin can exceed 50).',
         cancel_msg: '❌ Operation cancelled.',
         guessing_start: '🚀 Starting guess of {count} cards... Results will appear as they come.',
         generating: '🔄 Generating card {current}/{total}...',
-        checking: '⏳ Checking card...',
         live_result: '✅ **Card is LIVE**\n━━━━━━━━━━━━━━\n💳 `{card}`\n📊 Status: {status}\n💬 Message: {msg}\n🏦 Type: {type}\n🌍 Country: {country}\n━━━━━━━━━━━━━━',
         dead_result: '❌ **Card is DECLINED**\n━━━━━━━━━━━━━━\n💳 `{card}`\n📊 Status: {status}\n💬 Message: {msg}\n━━━━━━━━━━━━━━',
         summary: '📊 *Final Summary*\n✅ Live: {hit}\n❌ Declined: {bad}\n🎯 Total: {total}',
@@ -81,7 +80,8 @@ const t = {
         admin_added: '✅ New admin added: `{id}`',
         admin_removed: '✅ Admin removed: `{id}`',
         admin_list: '📋 Admin list:\n{list}',
-        help_admin: '🔧 Admin commands:\n/addadmin <id>\n/removeadmin <id>\n/admins'
+        help_admin: '🔧 Admin commands:\n/addadmin <id>\n/removeadmin <id>\n/admins',
+        no_active: '⚠️ No active process.'
     }
 };
 
@@ -118,19 +118,17 @@ function generateRandomCVV() {
 }
 
 function generateCardNumber(bin, length = 16) {
-    // bin قد يكون أقل من 6 أرقام أو أكثر (لكننا نأخذ أول 6 كما هي)
     let card = bin;
     while (card.length < length - 1) {
         card += Math.floor(Math.random() * 10);
     }
-    // إضافة الرقم الأخير لتحقيق Luhn
     for (let i = 0; i <= 9; i++) {
         const testCard = card + i;
         if (checkLuhn(testCard)) {
             return testCard;
         }
     }
-    return card + '0'; // fallback
+    return card + '0';
 }
 
 function generateFullVisa(bin) {
@@ -146,7 +144,7 @@ function generateFullVisa(bin) {
 // ==========================================
 async function checkSingleCard(cardString, chatId, isSilent = false) {
     const lang = userLang.get(chatId) || 'ar';
-    const dict = t[lang];
+    const dict = translations[lang];
 
     const parts = cardString.split('|');
     if (parts.length >= 1) {
@@ -187,42 +185,38 @@ async function checkSingleCard(cardString, chatId, isSilent = false) {
 // ==========================================
 async function startGuessing(chatId, bin, requestedCount) {
     const lang = userLang.get(chatId) || 'ar';
-    const dict = t[lang];
+    const dict = translations[lang];
     const isAdmin = adminSet.has(chatId);
     let total = requestedCount;
 
     if (!isAdmin && total > 50) {
         await bot.sendMessage(chatId, dict.count_exceed_admin);
-        return;
+        return false;
     }
     if (total < 5) total = 5;
     if (total > 50 && !isAdmin) total = 50;
 
-    // تخزين حالة الإلغاء
+    // تحديث الحالة
     const state = guessState.get(chatId);
-    if (state && state.cancelFlag) {
-        guessState.delete(chatId);
+    if (state) {
+        state.step = 'guessing';
+        state.cancelFlag = false;
     }
-    guessState.set(chatId, { bin, count: total, cancelFlag: false });
 
     await bot.sendMessage(chatId, dict.guessing_start.replace('{count}', total));
 
     let hit = 0, bad = 0;
     for (let i = 1; i <= total; i++) {
-        // التحقق من الإلغاء
         const currentState = guessState.get(chatId);
         if (currentState && currentState.cancelFlag) {
             await bot.sendMessage(chatId, dict.cancel_msg);
             guessState.delete(chatId);
-            return;
+            return false;
         }
 
-        // رسالة التقدم
         const progressMsg = await bot.sendMessage(chatId, dict.generating.replace('{current}', i).replace('{total}', total));
 
-        // توليد فيزا عشوائية
         const fullVisa = generateFullVisa(bin);
-        // فحصها
         const result = await checkSingleCard(fullVisa, chatId, true);
         if (result) {
             if (result.isLive) {
@@ -243,19 +237,17 @@ async function startGuessing(chatId, bin, requestedCount) {
                 await bot.sendMessage(chatId, deadText, { parse_mode: 'Markdown' });
             }
         } else {
-            // فشل الاتصال أو Luhn - نعتبرها bad
             bad++;
         }
 
-        // حذف رسالة التقدم لتجنب الفوضى
         bot.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
     }
 
-    // إرسال الملخص
     const summaryText = dict.summary.replace('{hit}', hit).replace('{bad}', bad).replace('{total}', total);
     await bot.sendMessage(chatId, summaryText, { parse_mode: 'Markdown' });
 
     guessState.delete(chatId);
+    return true;
 }
 
 // ==========================================
@@ -264,7 +256,7 @@ async function startGuessing(chatId, bin, requestedCount) {
 bot.onText(/\/addadmin (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
     if (!adminSet.has(chatId)) {
-        bot.sendMessage(chatId, t[userLang.get(chatId) || 'ar'].not_admin);
+        bot.sendMessage(chatId, translations[userLang.get(chatId) || 'ar'].not_admin);
         return;
     }
     const newAdminId = parseInt(match[1].trim(), 10);
@@ -273,14 +265,14 @@ bot.onText(/\/addadmin (.+)/, (msg, match) => {
         return;
     }
     adminSet.add(newAdminId);
-    const dict = t[userLang.get(chatId) || 'ar'];
+    const dict = translations[userLang.get(chatId) || 'ar'];
     bot.sendMessage(chatId, dict.admin_added.replace('{id}', newAdminId));
 });
 
 bot.onText(/\/removeadmin (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
     if (!adminSet.has(chatId)) {
-        bot.sendMessage(chatId, t[userLang.get(chatId) || 'ar'].not_admin);
+        bot.sendMessage(chatId, translations[userLang.get(chatId) || 'ar'].not_admin);
         return;
     }
     const adminId = parseInt(match[1].trim(), 10);
@@ -289,41 +281,41 @@ bot.onText(/\/removeadmin (.+)/, (msg, match) => {
         return;
     }
     adminSet.delete(adminId);
-    const dict = t[userLang.get(chatId) || 'ar'];
+    const dict = translations[userLang.get(chatId) || 'ar'];
     bot.sendMessage(chatId, dict.admin_removed.replace('{id}', adminId));
 });
 
 bot.onText(/\/admins/, (msg) => {
     const chatId = msg.chat.id;
     if (!adminSet.has(chatId)) {
-        bot.sendMessage(chatId, t[userLang.get(chatId) || 'ar'].not_admin);
+        bot.sendMessage(chatId, translations[userLang.get(chatId) || 'ar'].not_admin);
         return;
     }
     const list = Array.from(adminSet).join('\n');
-    const dict = t[userLang.get(chatId) || 'ar'];
+    const dict = translations[userLang.get(chatId) || 'ar'];
     bot.sendMessage(chatId, dict.admin_list.replace('{list}', list));
 });
 
-// ==========================================
-// أمر /cancel لإلغاء التخمين
-// ==========================================
 bot.onText(/\/cancel/, (msg) => {
     const chatId = msg.chat.id;
     const state = guessState.get(chatId);
-    if (state) {
+    if (state && (state.step === 'awaiting_bin' || state.step === 'awaiting_count' || state.step === 'guessing')) {
         state.cancelFlag = true;
-        bot.sendMessage(chatId, t[userLang.get(chatId) || 'ar'].cancel_msg);
+        guessState.delete(chatId);
+        const dict = translations[userLang.get(chatId) || 'ar'];
+        bot.sendMessage(chatId, dict.cancel_msg);
     } else {
-        bot.sendMessage(chatId, '⚠️ لا توجد عملية نشطة.');
+        const dict = translations[userLang.get(chatId) || 'ar'];
+        bot.sendMessage(chatId, dict.no_active);
     }
 });
 
 // ==========================================
-// القائمة الرئيسية (تظهر بعد /start أو /menu)
+// عرض القائمة الرئيسية
 // ==========================================
 async function showMainMenu(chatId) {
     const lang = userLang.get(chatId) || 'ar';
-    const dict = t[lang];
+    const dict = translations[lang];
     const opts = {
         reply_markup: {
             inline_keyboard: [
@@ -336,7 +328,9 @@ async function showMainMenu(chatId) {
     await bot.sendMessage(chatId, dict.main_menu, opts);
 }
 
-// أمر /start و /menu
+// ==========================================
+// أوامر /start و /menu
+// ==========================================
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     const opts = {
@@ -346,7 +340,7 @@ bot.onText(/\/start/, (msg) => {
             ]
         }
     };
-    bot.sendMessage(chatId, t.ar.choose_lang, opts);
+    bot.sendMessage(chatId, translations.ar.choose_lang, opts);
 });
 
 bot.onText(/\/menu/, (msg) => {
@@ -363,21 +357,33 @@ bot.on('callback_query', async (query) => {
 
     if (data === 'lang_ar') {
         userLang.set(chatId, 'ar');
-        await bot.sendMessage(chatId, t.ar.lang_changed + '\n\n' + t.ar.main_menu, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, translations.ar.lang_changed + '\n\n' + translations.ar.main_menu, { parse_mode: 'Markdown' });
         await showMainMenu(chatId);
     } else if (data === 'lang_en') {
         userLang.set(chatId, 'en');
-        await bot.sendMessage(chatId, t.en.lang_changed + '\n\n' + t.en.main_menu, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, translations.en.lang_changed + '\n\n' + translations.en.main_menu, { parse_mode: 'Markdown' });
         await showMainMenu(chatId);
     } else if (data === 'menu_guess') {
-        // بدء عملية التخمين: طلب BIN
-        await bot.sendMessage(chatId, t[userLang.get(chatId) || 'ar'].enter_bin, { parse_mode: 'Markdown' });
-        // ننتظر رسالة تحتوي على BIN
-        // سيتم التعامل معها في معالج الرسائل النصية حسب الحالة
+        // بدء حالة انتظار BIN
+        guessState.set(chatId, { step: 'awaiting_bin', cancelFlag: false });
+        const dict = translations[userLang.get(chatId) || 'ar'];
+        const cancelKeyboard = {
+            reply_markup: {
+                inline_keyboard: [[{ text: dict.cancel_btn, callback_data: 'cancel_guess' }]]
+            }
+        };
+        await bot.sendMessage(chatId, dict.enter_bin, { parse_mode: 'Markdown', ...cancelKeyboard });
     } else if (data === 'menu_single') {
-        // إعلام المستخدم بأنه يمكنه إرسال فيزا واحدة
-        const lang = userLang.get(chatId) || 'ar';
-        await bot.sendMessage(chatId, t[lang].single_invalid, { parse_mode: 'Markdown' });
+        const dict = translations[userLang.get(chatId) || 'ar'];
+        await bot.sendMessage(chatId, dict.single_invalid, { parse_mode: 'Markdown' });
+    } else if (data === 'cancel_guess') {
+        const state = guessState.get(chatId);
+        if (state) {
+            state.cancelFlag = true;
+            guessState.delete(chatId);
+            const dict = translations[userLang.get(chatId) || 'ar'];
+            await bot.sendMessage(chatId, dict.cancel_msg);
+        }
     }
 });
 
@@ -390,14 +396,17 @@ bot.on('message', async (msg) => {
     if (!text || text.startsWith('/')) return;
 
     const lang = userLang.get(chatId) || 'ar';
-    const dict = t[lang];
-
-    // 1) هل المستخدم في مرحلة انتظار BIN؟
+    const dict = translations[lang];
     const state = guessState.get(chatId);
-    if (state && !state.bin) {
-        // ننتظر BIN
-        if (/^\d{6}$/.test(text.trim())) {
-            state.bin = text.trim();
+
+    // الحالة 1: انتظار BIN
+    if (state && state.step === 'awaiting_bin') {
+        const cleaned = text.trim();
+        if (/^\d{6,}$/.test(cleaned)) {
+            // أخذ أول 6 أرقام كـ BIN
+            const bin = cleaned.slice(0, 6);
+            state.bin = bin;
+            state.step = 'awaiting_count';
             // نطلب العدد
             const cancelKeyboard = {
                 reply_markup: {
@@ -411,8 +420,8 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // 2) هل المستخدم في مرحلة انتظار العدد؟
-    if (state && state.bin && !state.count) {
+    // الحالة 2: انتظار العدد
+    if (state && state.step === 'awaiting_count') {
         const count = parseInt(text.trim(), 10);
         if (isNaN(count)) {
             await bot.sendMessage(chatId, dict.enter_count);
@@ -433,7 +442,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // 3) لا توجد حالة تخمين -> نعتبره فحص فيزا واحدة
+    // الحالة 3: لا توجد حالة تخمين -> نعتبره فحص فيزا واحدة
     if (text.split('|').length < 4) {
         await bot.sendMessage(chatId, dict.single_invalid, { parse_mode: 'Markdown' });
         return;
@@ -460,18 +469,4 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(chatId, resultText, { parse_mode: 'Markdown' });
 });
 
-// إضافة معالج إلغاء من الكيبورد
-bot.on('callback_query', async (query) => {
-    if (query.data === 'cancel_guess') {
-        const chatId = query.message.chat.id;
-        const state = guessState.get(chatId);
-        if (state) {
-            state.cancelFlag = true;
-            await bot.sendMessage(chatId, t[userLang.get(chatId) || 'ar'].cancel_msg);
-            guessState.delete(chatId);
-        }
-        bot.answerCallbackQuery(query.id);
-    }
-});
-
-console.log('✅ البوت يعمل الآن مع وضع التخمين الجماعي وإدارة الأدمن...');
+console.log('✅ البوت يعمل الآن بشكل احترافي مع إدارة الحالات الكاملة...');
