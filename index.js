@@ -17,7 +17,7 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 // ==========================================
 const userLang = new Map();
 const adminSet = new Set([643309456]);
-const guessState = new Map(); // chatId -> { step, bin, count, cancelFlag, progressMsgId }
+const guessState = new Map();
 
 // ==========================================
 // أعلام الدول (Emoji Flags)
@@ -179,7 +179,6 @@ async function checkSingleCard(cardString, chatId, isSilent = false) {
         let cardType = cardInfo.type || getCardType(cardString.split('|')[0]);
         const country = (cardInfo.country && cardInfo.country.name) || 'غير معروف';
         
-        // تنظيف الرسالة من النص "احذفها"
         msg = msg.replace(/احذفها/gi, '').trim();
         
         const isLive = (code === 1);
@@ -192,7 +191,7 @@ async function checkSingleCard(cardString, chatId, isSilent = false) {
 }
 
 // ==========================================
-// دالة إنشاء أزرار النسخ
+// دالة إنشاء أزرار النسخ (ترسل النص المطلوب في رسالة جديدة)
 // ==========================================
 function getCopyButtons(fullCard) {
     const parts = fullCard.split('|');
@@ -229,13 +228,11 @@ async function updateProgressMessage(chatId, messageId, current, total, bin) {
             message_id: messageId,
             parse_mode: 'Markdown'
         });
-    } catch (e) {
-        // تجاهل أخطاء التعديل
-    }
+    } catch (e) {}
 }
 
 // ==========================================
-// دالة التخمين الجماعي (عرض الصالحة فقط مع أزرار)
+// دالة التخمين الجماعي (عرض الصالحة فقط مع تنسيق محسن)
 // ==========================================
 async function startGuessing(chatId, bin, requestedCount) {
     const isAdmin = adminSet.has(chatId);
@@ -254,7 +251,6 @@ async function startGuessing(chatId, bin, requestedCount) {
         state.cancelFlag = false;
     }
 
-    // إرسال رسالة التقدم الأولية
     const progressMsg = await bot.sendMessage(chatId, `🔄 جاري إنشاء الفيزا 0/${total} .\n━━━━━━━━━━━━━━\n📌 BIN: ${bin}`);
     if (state) state.progressMsgId = progressMsg.message_id;
     
@@ -276,7 +272,6 @@ async function startGuessing(chatId, bin, requestedCount) {
         if (result && result.isLive) {
             hit++;
             
-            // تنظيف الرسالة من النص "احذفها"
             let cleanMessage = result.message;
             cleanMessage = cleanMessage.replace(/احذفها/gi, '').trim();
             
@@ -284,12 +279,18 @@ async function startGuessing(chatId, bin, requestedCount) {
             const cardNumber = fullVisa.split('|')[0];
             const cardTypeDisplay = getCardType(cardNumber);
             
+            // التنسيق المطلوب مع فراغات سطرية بين الحقول
             const liveText = `✅ تعمل بنجاح ✅
 ----------------------------------------
+
 💳    ${fullVisa}
+
 📊 الحالة: تعمل ✅
+
 🏦 النوع: ${cardTypeDisplay}
+
 🌍 البلد: ${result.country} ${flag}
+
 ----------------------------------------
 بواسطة: @pe8bot`;
             
@@ -298,7 +299,6 @@ async function startGuessing(chatId, bin, requestedCount) {
         }
     }
     
-    // حذف رسالة التقدم بعد الانتهاء
     try {
         await bot.deleteMessage(chatId, progressMsg.message_id);
     } catch(e) {}
@@ -356,9 +356,6 @@ bot.onText(/\/admins/, (msg) => {
     bot.sendMessage(chatId, `📋 قائمة الأدمن:\n${list}`);
 });
 
-// ==========================================
-// أمر /cancel لإلغاء الحملة الحالية
-// ==========================================
 bot.onText(/\/cancel/, (msg) => {
     const chatId = msg.chat.id;
     const state = guessState.get(chatId);
@@ -371,9 +368,6 @@ bot.onText(/\/cancel/, (msg) => {
     }
 });
 
-// ==========================================
-// عرض القائمة الرئيسية
-// ==========================================
 async function showMainMenu(chatId) {
     const opts = {
         reply_markup: {
@@ -387,9 +381,6 @@ async function showMainMenu(chatId) {
     await bot.sendMessage(chatId, '✨ *القائمة الرئيسية* ✨\nاختر أحد الخيارين:', opts);
 }
 
-// ==========================================
-// أوامر /start و /menu (مع التحقق من وجود حملة نشطة)
-// ==========================================
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const state = guessState.get(chatId);
@@ -424,14 +415,14 @@ bot.onText(/\/menu/, async (msg) => {
 });
 
 // ==========================================
-// معالجة الأزرار (اللغة، القائمة، النسخ، الإلغاء)
+// معالجة الأزرار
 // ==========================================
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const data = query.data;
     bot.answerCallbackQuery(query.id);
 
-    // معالجة أزرار النسخ
+    // أزرار النسخ: ترسل النص المطلوب في رسالة جديدة
     if (data.startsWith('copy_full_')) {
         const full = data.replace('copy_full_', '');
         await bot.sendMessage(chatId, `\`${full}\``, { parse_mode: 'Markdown' });
@@ -506,8 +497,11 @@ bot.on('message', async (msg) => {
     // حالة انتظار BIN
     if (state && state.step === 'awaiting_bin') {
         const cleaned = text.trim();
-        if (/^\d{6,}$/.test(cleaned)) {
-            const bin = cleaned.slice(0, 6);
+        if (/^\d+$/.test(cleaned)) {
+            let bin = cleaned.slice(0, 6);
+            while (bin.length < 6) {
+                bin += Math.floor(Math.random() * 10);
+            }
             state.bin = bin;
             state.step = 'awaiting_count';
             const cancelKeyboard = {
@@ -516,8 +510,6 @@ bot.on('message', async (msg) => {
                 }
             };
             await bot.sendMessage(chatId, '🔢 كم عدد الفيزات التي تريد تخمينها؟\n(الحد الأدنى 5، الحد الأقصى 50)\nللأدمن: لا يوجد حد أقصى.', cancelKeyboard);
-        } else {
-            await bot.sendMessage(chatId, '⚠️ يجب إرسال أرقام صالحة (على الأقل 6 أرقام).');
         }
         return;
     }
@@ -543,7 +535,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // فحص فيزا واحدة (للمستخدمين العاديين) - بدون أي رسالة خطأ إذا كان التنسيق خاطئاً
+    // فحص فيزا واحدة (للمستخدمين العاديين)
     if (text.includes('|')) {
         const result = await checkSingleCard(text, chatId);
         if (result && result.isLive) {
@@ -555,10 +547,15 @@ bot.on('message', async (msg) => {
             
             const liveText = `✅ تعمل بنجاح ✅
 ----------------------------------------
+
 💳    ${text}
+
 📊 الحالة: تعمل ✅
+
 🏦 النوع: ${cardTypeDisplay}
+
 🌍 البلد: ${result.country} ${flag}
+
 ----------------------------------------
 بواسطة: @pe8bot`;
             
@@ -567,7 +564,7 @@ bot.on('message', async (msg) => {
         }
         // إذا كانت البطاقة مرفوضة أو غير صالحة، لا نرسل شيئاً
     }
-    // إذا لم يكن فيها | ولا توجد حالة، نتجاهل (لا نرسل أي رسالة خطأ)
+    // أي رسالة أخرى لا تحتوي على | ولا توجد حالة، يتم تجاهلها بصمت
 });
 
-console.log('✅ البوت يعمل الآن - يعرض فقط البطاقات الصالحة مع أزرار النسخ والتنسيق الجديد...');
+console.log('✅ البوت يعمل الآن بالتنسيق المطلوب وأزرار نسخ ترسل النص...');
