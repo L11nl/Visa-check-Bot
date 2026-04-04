@@ -5,29 +5,36 @@ const path = require('path');
 const express = require('express');
 
 // ==========================================
-// إعدادات البيئة والخادم (لضمان بقاء البوت يعمل)
+// 🛡️ موانع الانهيار (Anti-Crash) لضمان عدم توقف البوت
+// ==========================================
+process.on('uncaughtException', (err) => { console.error('⚠️ Uncaught Exception:', err.message); });
+process.on('unhandledRejection', (reason, promise) => { console.error('⚠️ Unhandled Rejection:', reason); });
+
+// ==========================================
+// إعدادات البيئة والخادم (لإبقاء البوت يعمل على الاستضافات)
 // ==========================================
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('Bot is running!'));
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+app.get('/', (req, res) => res.send('✅ Bot is running perfectly!'));
+app.listen(PORT, () => console.log(`🌐 Server is running on port ${PORT}`)).on('error', (err) => console.error('Express Error:', err.message));
 
-const TOKEN = process.env.TOKEN; // ضع توكن البوت في متغيرات البيئة
+const TOKEN = process.env.TOKEN; 
 if (!TOKEN) {
-    console.error('❌ TOKEN is required');
+    console.error('❌ توكن البوت غير موجود! تأكد من إضافته في متغيرات البيئة (TOKEN).');
     process.exit(1);
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
+bot.on('polling_error', (error) => { console.error('⚠️ Polling Error:', error.message); });
 
 // ==========================================
 // المتغيرات العامة
 // ==========================================
-const MAIN_ADMIN = 643309456; // معرف الأدمن الأساسي
+const MAIN_ADMIN = 643309456; // 👈 هذا معرفك كأدمن أساسي
 const adminSet = new Set([MAIN_ADMIN]);
 const userLang = new Map();
-const userStates = new Map();          // { step, bins, defaultCount, progressMsgId, campaignsData, cancelFlag }
-const activeJobs = new Map();          // مفتاح chatId -> { cancel: false }
+const userStates = new Map();          
+const activeJobs = new Map();          
 const BINANCE_PAY_ID = '842505320';
 
 // ==========================================
@@ -62,7 +69,7 @@ const translations = {
         upgrade_to_vip: '🚀 تطوير إلى VIP',
         upgrade_suggestion: 'يمكنك ترقية اشتراكك الآن:',
         subscribe_confirm: '✅ اخترت خطة {plan}\nقم بتحويل {amount} USDT إلى معرف بايننس (Binance Pay ID):\n`{payId}`\nواكتب هذا الكود في ملاحظات التحويل (Memo/Notes):\n`{code}`\n\n📸 *بعد التحويل، أرسل صورة الإثبات هنا مباشرة.*',
-        payment_timeout: '⚠️ انتهى وقت الانتظار (20 ثانية). يرجى إرسال صورة التحويل متى ما قمت بالدفع ليتم مراجعتها.',
+        payment_timeout: '⚠️ انتهى وقت الانتظار. أرسل صورة التحويل متى ما قمت بالدفع.',
         payment_received: '📸 تم استلام صورة الإثبات. سيتم مراجعتها من قبل الإدارة قريباً.',
         payment_approved: '🎉 مبروك! تم تفعيل اشتراك {plan} بنجاح.',
         payment_rejected: '❌ عذراً، تم رفض طلب الاشتراك لعدم تطابق بيانات الدفع.',
@@ -100,7 +107,7 @@ const translations = {
         upgrade_to_vip: '🚀 Upgrade to VIP',
         upgrade_suggestion: 'You can upgrade your subscription now:',
         subscribe_confirm: '✅ You selected {plan} plan\nPlease send {amount} USDT to Binance Pay ID:\n`{payId}`\nAnd write this code in the memo/notes:\n`{code}`\n\n📸 *After payment, send the screenshot proof here directly.*',
-        payment_timeout: '⚠️ 20 seconds timeout. Please send the payment proof photo whenever you are ready.',
+        payment_timeout: '⚠️ Timeout. Please send the payment proof photo whenever you are ready.',
         payment_received: '📸 Payment proof received. It will be reviewed by admins soon.',
         payment_approved: '🎉 Congratulations! Your {plan} subscription has been activated.',
         payment_rejected: '❌ Sorry, your subscription request was rejected.',
@@ -113,16 +120,24 @@ const translations = {
 };
 
 // ==========================================
-// قاعدة بيانات JSON
+// قاعدة بيانات JSON (مع حماية ضد تلف الملف)
 // ==========================================
 const DATA_FILE = path.join(__dirname, 'data.json');
 
 function loadData() {
     if (!fs.existsSync(DATA_FILE)) return { subscribers: {}, campaigns: {}, pendingPayments: [], paymentProofs: [], plans: null };
-    try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch(e) { return { subscribers: {}, campaigns: {}, pendingPayments: [], paymentProofs: [], plans: null }; }
+    try { 
+        return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); 
+    } catch(e) { 
+        console.error('⚠️ Data File Corrupted, loading defaults.');
+        return { subscribers: {}, campaigns: {}, pendingPayments: [], paymentProofs: [], plans: null }; 
+    }
 }
 
-function saveData(data) { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2)); }
+function saveData(data) { 
+    try { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2)); } 
+    catch(e) { console.error('⚠️ Save Data Error:', e.message); } 
+}
 
 function getPlans() {
     const data = loadData();
@@ -148,9 +163,7 @@ function getSubscriber(userId) {
     }
     const sub = data.subscribers[userId];
     if (sub.plan !== 'free' && new Date(sub.endDate) < new Date()) {
-        sub.plan = 'free';
-        sub.startDate = new Date().toISOString();
-        sub.endDate = new Date(Date.now() + 365*24*60*60*1000).toISOString();
+        sub.plan = 'free'; sub.startDate = new Date().toISOString(); sub.endDate = new Date(Date.now() + 365*24*60*60*1000).toISOString();
         saveData(data);
     }
     return sub;
@@ -236,11 +249,13 @@ async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) 
     let progressMsg;
     try {
         progressMsg = await bot.sendMessage(chatId, buildProgressText(campaignsData, speedPercent), { reply_markup: { inline_keyboard: [[{ text: dict.cancel_btn, callback_data: 'cancel_all_campaigns' }]] } });
-    } catch(e) { return; }
+    } catch(e) { console.error('Failed to send progress msg:', e.message); return; }
 
     const updateProgress = async () => {
         if (activeJobs.get(chatId)?.cancel) return;
-        try { await bot.editMessageText(buildProgressText(campaignsData, speedPercent), { chat_id: chatId, message_id: progressMsg.message_id, reply_markup: { inline_keyboard: [[{ text: dict.cancel_btn, callback_data: 'cancel_all_campaigns' }]] } }); } catch(e) {}
+        try { 
+            await bot.editMessageText(buildProgressText(campaignsData, speedPercent), { chat_id: chatId, message_id: progressMsg.message_id, reply_markup: { inline_keyboard: [[{ text: dict.cancel_btn, callback_data: 'cancel_all_campaigns' }]] } }); 
+        } catch(e) { /* تجاهل أخطاء التعديل المتكرر */ }
     };
 
     const runSingle = async (camp) => {
@@ -317,11 +332,11 @@ async function handleSubscription(chatId, plan) {
     const plans = getPlans();
     
     if (subscriber.plan === plan) {
-        await bot.sendMessage(chatId, dict.already_subscribed.replace('{plan}', plans[plan][`name${lang==='ar'?'Ar':'En'}`]));
+        await bot.sendMessage(chatId, dict.already_subscribed.replace('{plan}', plans[plan][`name${lang==='ar'?'Ar':'En'}`])).catch(()=>{});
         const up = [];
         if (plan === 'plus') up.push({ text: dict.upgrade_to_pro, callback_data: 'sub_pro' });
         if (plan === 'pro') up.push({ text: dict.upgrade_to_vip, callback_data: 'sub_vip' });
-        if (up.length) await bot.sendMessage(chatId, dict.upgrade_suggestion, { reply_markup: { inline_keyboard: [up] } });
+        if (up.length) await bot.sendMessage(chatId, dict.upgrade_suggestion, { reply_markup: { inline_keyboard: [up] } }).catch(()=>{});
         return;
     }
     
@@ -333,7 +348,7 @@ async function handleSubscription(chatId, plan) {
         .replace('{payId}', BINANCE_PAY_ID)
         .replace('{code}', code);
         
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' }).catch(()=>{});
     setTimeout(async () => { 
         const p = getPendingPayment(chatId, plan); 
         if(p && p.status === 'waiting_payment') await bot.sendMessage(chatId, dict.payment_timeout).catch(()=>{}); 
@@ -385,11 +400,11 @@ async function showAdminPanel(chatId) {
 }
 
 // ==========================================
-// معالجة الأوامر (/start, /menu, الخ)
+// معالجة الأوامر 
 // ==========================================
 bot.onText(/\/start/, async (msg) => { 
     const cid=msg.chat.id; 
-    userStates.delete(cid); // تفريغ أي حالة سابقة
+    userStates.delete(cid);
     await bot.sendMessage(cid, 'اختر لغتك / Choose your language:', { reply_markup:{ inline_keyboard:[[{text:'العربية 🇸🇦',callback_data:'lang_ar'},{text:'English 🇺🇸',callback_data:'lang_en'}]] } }).catch(()=>{}); 
 });
 bot.onText(/\/menu/, async (msg) => { await showMainMenu(msg.chat.id); });
@@ -405,34 +420,30 @@ bot.onText(/\/cancel/, async (msg) => {
         await bot.sendMessage(cid, translations[lang].cancel_msg).catch(()=>{}); 
     }
 });
-bot.onText(/\/addadmin (.+)/, async (msg, match) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; const id=parseInt(match[1]); if(!isNaN(id)) adminSet.add(id); await bot.sendMessage(cid, `✅ تم إضافة أدمن ${id}`); });
-bot.onText(/\/removeadmin (.+)/, async (msg, match) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; const id=parseInt(match[1]); if(id===MAIN_ADMIN){ await bot.sendMessage(cid,'⚠️ لا يمكن إزالة الأدمن الأساسي'); return; } adminSet.delete(id); await bot.sendMessage(cid,`✅ تم إزالة أدمن ${id}`); });
-bot.onText(/\/admins/, async (msg) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; await bot.sendMessage(cid, `📋 قائمة الأدمن:\n${Array.from(adminSet).join('\n')}`); });
+bot.onText(/\/addadmin (.+)/, async (msg, match) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; const id=parseInt(match[1]); if(!isNaN(id)) adminSet.add(id); await bot.sendMessage(cid, `✅ تم إضافة أدمن ${id}`).catch(()=>{}); });
+bot.onText(/\/removeadmin (.+)/, async (msg, match) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; const id=parseInt(match[1]); if(id===MAIN_ADMIN){ await bot.sendMessage(cid,'⚠️ لا يمكن إزالة الأدمن الأساسي').catch(()=>{}); return; } adminSet.delete(id); await bot.sendMessage(cid,`✅ تم إزالة أدمن ${id}`).catch(()=>{}); });
+bot.onText(/\/admins/, async (msg) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; await bot.sendMessage(cid, `📋 قائمة الأدمن:\n${Array.from(adminSet).join('\n')}`).catch(()=>{}); });
 
 // ==========================================
 // معالجة الأزرار (Callback Queries)
 // ==========================================
 bot.on('callback_query', async (query) => {
     const cid=query.message.chat.id, data=query.data, lang=userLang.get(cid)||'ar', dict=translations[lang];
-    await bot.answerCallbackQuery(query.id).catch(()=>{}); // منع خطأ انتهاء وقت الاستعلام
+    bot.answerCallbackQuery(query.id).catch(()=>{});
     
-    // أزرار النسخ
     if(data.startsWith('copy_full_')){ await bot.sendMessage(cid,`\`${data.replace('copy_full_','')}\``,{parse_mode:'Markdown'}).catch(()=>{}); return; }
     if(data.startsWith('copy_num_')){ await bot.sendMessage(cid,`\`${data.replace('copy_num_','')}\``,{parse_mode:'Markdown'}).catch(()=>{}); return; }
     if(data.startsWith('copy_exp_')){ await bot.sendMessage(cid,`\`${data.replace('copy_exp_','')}\``,{parse_mode:'Markdown'}).catch(()=>{}); return; }
     if(data.startsWith('copy_cvv_')){ await bot.sendMessage(cid,`\`${data.replace('copy_cvv_','')}\``,{parse_mode:'Markdown'}).catch(()=>{}); return; }
     
-    // اللغات
     if(data==='lang_ar'){ userLang.set(cid,'ar'); await bot.sendMessage(cid,'✅ تم اختيار اللغة العربية').catch(()=>{}); await showMainMenu(cid); return; }
     if(data==='lang_en'){ userLang.set(cid,'en'); await bot.sendMessage(cid,'✅ Language set to English').catch(()=>{}); await showMainMenu(cid); return; }
     
-    // القوائم
     if(data==='menu_guess'){ userStates.set(cid,{step:'awaiting_bin',bins:[],defaultCount:null}); await bot.sendMessage(cid, dict.enter_bin, { parse_mode:'Markdown' }).catch(()=>{}); return; }
     if(data==='menu_single'){ await bot.sendMessage(cid, dict.single_invalid, { parse_mode:'Markdown' }).catch(()=>{}); return; }
     if(data==='menu_subscribe'){ await showSubscriptionMenu(cid); return; }
     if(data==='menu_my_campaigns'){ await showMyCampaigns(cid); return; }
     
-    // أزرار التخمين
     if(data==='add_another_bin'){ 
         const st=userStates.get(cid); 
         if(st && st.step==='awaiting_decision'){ 
@@ -448,15 +459,12 @@ bot.on('callback_query', async (query) => {
     if(data==='set_default_count'){ const st=userStates.get(cid); if(st && st.bins.length>0){ st.step='awaiting_default_count'; await bot.sendMessage(cid,'🔢 أدخل العدد الذي تريد تخمينه لكل حملة (سيتم تطبيقه على جميع BINs الحالية والمستقبلية):').catch(()=>{}); } else await bot.sendMessage(cid,'⚠️ يرجى إدخال BIN أولاً.').catch(()=>{}); return; }
     if(data==='start_with_default' || data==='start_campaigns'){ const st=userStates.get(cid); if(!st || st.bins.length===0){ await bot.sendMessage(cid,'⚠️ لم تقم بإدخال أي BIN بعد.').catch(()=>{}); return; } if(!st.defaultCount){ await bot.sendMessage(cid,'⚠️ يرجى تعيين العدد الافتراضي أولاً.').catch(()=>{}); return; } st.step='running'; await runMultipleCampaignsParallel(cid, st.bins, st.defaultCount); return; }
     
-    // الإلغاء والتوقف
     if(data==='cancel_all_campaigns'){ if(activeJobs.has(cid)){ activeJobs.get(cid).cancel=true; activeJobs.delete(cid); await bot.sendMessage(cid,'❌ تم إيقاف عملية التخمين.').catch(()=>{}); } return; }
     if(data==='cancel_guess'){ userStates.delete(cid); await bot.sendMessage(cid, dict.cancel_msg).catch(()=>{}); return; }
     if(data.startsWith('stop_camp_')){ const campId=parseFloat(data.split('_')[2]); updateCampaign(campId,null,null,'stopped'); await bot.sendMessage(cid, dict.campaign_stopped).catch(()=>{}); await showMyCampaigns(cid); return; }
     
-    // الاشتراكات
     if(data.startsWith('sub_')){ await handleSubscription(cid, data.replace('sub_','')); return; }
     
-    // لوحة الأدمن
     if(data==='admin_panel'){ if(!adminSet.has(cid)){ await bot.sendMessage(cid, dict.not_admin).catch(()=>{}); return; } await showAdminPanel(cid); return; }
     if(data==='admin_edit_prices'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_edit_price'}); await bot.sendMessage(cid,'أرسل الخطة والسعر الجديد بالصيغة: plan=price\nمثال: plus=4').catch(()=>{}); return; }
     if(data==='admin_edit_speed'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_edit_speed'}); await bot.sendMessage(cid,'أرسل الخطة والسرعة الجديدة بالصيغة: plan=speed\nمثال: pro=80').catch(()=>{}); return; }
@@ -466,7 +474,6 @@ bot.on('callback_query', async (query) => {
     if(data==='admin_list'){ if(!adminSet.has(cid)) return; const subs=getAllSubscribers(); let msg='📋 *قائمة الأعضاء:*\n\n'; for(const [id,sub] of Object.entries(subs)) { if(sub.plan !== 'free') msg+=`🆔 \`${id}\` | خطة: ${sub.plan} \n📅 ينتهي: ${sub.endDate.split('T')[0]}\n\n`; } await bot.sendMessage(cid, msg, {parse_mode: 'Markdown'}).catch(()=>{}); return; }
     if(data==='main_menu'){ await showMainMenu(cid); return; }
     
-    // موافقة أو رفض الدفع (للأدمن)
     if(data.startsWith('approve_payment_')||data.startsWith('reject_payment_')){ 
         if(!adminSet.has(cid)) return; 
         const parts=data.split('_'), action=parts[0], proofId=parseFloat(parts[2]), proof=getPaymentProof(proofId); 
@@ -487,7 +494,6 @@ bot.on('callback_query', async (query) => {
                 await bot.sendMessage(proof.userId, translations[ul].payment_rejected).catch(()=>{}); 
                 await bot.sendMessage(cid,`❌ تم رفض الاشتراك للمستخدم ${proof.userId}`).catch(()=>{}); 
             } 
-            // تعديل أزرار رسالة الإثبات عند الأدمن لتوضيح أنه تم اتخاذ إجراء
             await bot.editMessageReplyMarkup({ inline_keyboard: [[{text: action==='approve'? '✅ تمت الموافقة' : '❌ تم الرفض', callback_data: 'done'}]] }, { chat_id: cid, message_id: query.message.message_id }).catch(()=>{});
         } 
         return; 
@@ -502,7 +508,6 @@ bot.on('message', async (msg) => {
     const lang=userLang.get(cid)||'ar', dict=translations[lang];
     const state=userStates.get(cid);
 
-    // صور إثبات الدفع
     if(msg.photo){
         const photo=msg.photo[msg.photo.length-1];
         const fileId=photo.file_id;
@@ -520,7 +525,6 @@ bot.on('message', async (msg) => {
 
     if(!text || text.startsWith('/')) return;
 
-    // فحص فيزا واحدة (يجب أن تحتوي على العلامة | )
     if(text.includes('|') && text.length > 20){
         await bot.sendMessage(cid, dict.single_checking).catch(()=>{});
         const result=await checkSingleCard(text,cid);
@@ -534,7 +538,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // حالة انتظار BIN
     if(state && state.step==='awaiting_bin'){
         if(/^\d+$/.test(text) && text.length >= 6){
             let bin=text.slice(0,6); while(bin.length<6) bin+=Math.floor(Math.random()*10);
@@ -558,7 +561,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // حالة انتظار العدد
     if(state && (state.step==='awaiting_count' || state.step==='awaiting_default_count')){
         const count=parseInt(text);
         if(isNaN(count)){ await bot.sendMessage(cid,'⚠️ يرجى إرسال رقم صحيح.').catch(()=>{}); return; }
@@ -590,7 +592,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // أوامر الأدمن
     if(state && state.step.startsWith('admin_')){
         if(!adminSet.has(cid)) return;
         
@@ -631,7 +632,7 @@ bot.on('message', async (msg) => {
             const userId=parseInt(parts[0]), planKey=parts[1].toLowerCase();
             const plans=getPlans();
             if(!plans[planKey]){ await bot.sendMessage(cid,`⚠️ الخطة ${planKey} غير موجودة`).catch(()=>{}); return; }
-            const end=new Date(); end.setMonth(end.getMonth()+1); // اشتراك شهر
+            const end=new Date(); end.setMonth(end.getMonth()+1);
             updateSubscriber(userId,{plan:planKey,startDate:new Date().toISOString(),endDate:end.toISOString()});
             await bot.sendMessage(cid,`✅ تم منح اشتراك ${planKey} للمستخدم \`${userId}\``, {parse_mode: 'Markdown'}).catch(()=>{});
         }
@@ -648,4 +649,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('✅ Bot is running and ready to go!');
+console.log('✅ Bot started securely with anti-crash protocols!');
