@@ -27,7 +27,6 @@ function saveData(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// دوال مساعدة للتعامل مع البيانات
 function getSubscriber(userId) {
     const data = loadData();
     if (!data.subscribers[userId]) {
@@ -35,16 +34,15 @@ function getSubscriber(userId) {
             plan: 'free',
             startDate: new Date().toISOString(),
             endDate: new Date(Date.now() + 365*24*60*60*1000).toISOString(),
-            campaignsLimit: 1,
+            campaignsLimit: 2,  // تغيير: المجاني 2 حملات
             cardsLimit: 10
         };
         saveData(data);
     }
-    // التحقق من انتهاء الاشتراك
     const sub = data.subscribers[userId];
     if (sub.plan !== 'free' && new Date(sub.endDate) < new Date()) {
         sub.plan = 'free';
-        sub.campaignsLimit = 1;
+        sub.campaignsLimit = 2;
         sub.cardsLimit = 10;
         sub.startDate = new Date().toISOString();
         sub.endDate = new Date(Date.now() + 365*24*60*60*1000).toISOString();
@@ -86,12 +84,13 @@ function updateCampaign(campaignId, current, hit, status) {
 
 function createPendingPayment(userId, plan, code) {
     const data = loadData();
-    data.pendingPayments.push({
+    const payment = {
         id: Date.now() + Math.random(),
         userId, plan, amount: PLANS[plan].price, code, status: 'waiting_payment', createdAt: new Date().toISOString()
-    });
+    };
+    data.pendingPayments.push(payment);
     saveData(data);
-    return data.pendingPayments[data.pendingPayments.length-1];
+    return payment;
 }
 
 function getPendingPayment(userId, plan) {
@@ -132,15 +131,15 @@ function updatePaymentProof(id, status) {
 // ==========================================
 // المتغيرات العامة
 // ==========================================
-const userLang = new Map();
+const userLang = new Map(); // chatId -> 'ar'/'en'
 const adminSet = new Set([643309456]);
 const guessState = new Map();
 
 const PLANS = {
-    free: { name: 'مجاني', price: 0, cardsLimit: 10, campaignsLimit: 1 },
-    plus: { name: 'Plus', price: 3, cardsLimit: 70, campaignsLimit: 3 },
-    pro: { name: 'Pro', price: 5, cardsLimit: 150, campaignsLimit: 5 },
-    vip: { name: 'VIP', price: 8, cardsLimit: 350, campaignsLimit: 7 }
+    free: { name: { ar: 'مجاني', en: 'Free' }, price: 0, cardsLimit: 10, campaignsLimit: 2 },
+    plus: { name: { ar: 'Plus', en: 'Plus' }, price: 3, cardsLimit: 70, campaignsLimit: 3 },
+    pro: { name: { ar: 'Pro', en: 'Pro' }, price: 5, cardsLimit: 150, campaignsLimit: 5 },
+    vip: { name: { ar: 'VIP', en: 'VIP' }, price: 8, cardsLimit: 350, campaignsLimit: 7 }
 };
 
 const BINANCE_PAY_ID = '842505320';
@@ -245,7 +244,7 @@ async function checkSingleCard(cardString, chatId, isSilent = false) {
             country: (data.card && data.card.country && data.card.country.name) || 'غير معروف'
         };
     } catch(e) {
-        if (!isSilent) await bot.sendMessage(chatId, '⚠️ خطأ في الاتصال بالخدمة.');
+        if (!isSilent) await bot.sendMessage(chatId, translations[userLang.get(chatId)||'ar'].api_error);
         return null;
     }
 }
@@ -253,32 +252,38 @@ async function checkSingleCard(cardString, chatId, isSilent = false) {
 // ==========================================
 // دوال الأزرار والنسخ
 // ==========================================
-function getCopyButtons(fullCard) {
+function getCopyButtons(fullCard, lang) {
     const [num, month, year, cvv] = fullCard.split('|');
+    const dict = translations[lang];
     return {
         reply_markup: {
             inline_keyboard: [
-                [{ text: '📋 نسخ الفيزا كاملة', callback_data: `copy_full_${fullCard}` }],
-                [{ text: '🔢 نسخ الرقم', callback_data: `copy_num_${num}` }],
-                [{ text: '📅 نسخ التاريخ', callback_data: `copy_exp_${month}|${year}` }],
-                [{ text: '🔐 نسخ CVV', callback_data: `copy_cvv_${cvv}` }]
+                [{ text: dict.btn_copy_full, callback_data: `copy_full_${fullCard}` }],
+                [{ text: dict.btn_copy_num, callback_data: `copy_num_${num}` }],
+                [{ text: dict.btn_copy_exp, callback_data: `copy_exp_${month}|${year}` }],
+                [{ text: dict.btn_copy_cvv, callback_data: `copy_cvv_${cvv}` }]
             ]
         }
     };
 }
 
 // ==========================================
-// الترجمات (عربية)
+// الترجمات الكاملة (عربي وإنجليزي)
 // ==========================================
-const t = {
+const translations = {
     ar: {
         choose_lang: 'اختر لغتك / Choose your language:',
+        lang_changed: '✅ تم تغيير اللغة إلى العربية',
         main_menu: '✨ *القائمة الرئيسية* ✨\nاختر أحد الخيارين:',
         btn_guess: '🎲 تخمين مجموعة فيزات',
         btn_single: '🔍 فحص فيزا واحدة',
         btn_subscribe: '💎 الاشتراكات',
         btn_my_campaigns: '📋 حملاي النشطة',
         cancel_btn: '❌ إلغاء',
+        btn_copy_full: '📋 نسخ الفيزا كاملة',
+        btn_copy_num: '🔢 نسخ الرقم',
+        btn_copy_exp: '📅 نسخ التاريخ',
+        btn_copy_cvv: '🔐 نسخ CVV',
         enter_bin: '📌 أرسل الـ BIN الخاص بك (أول 6 أرقام أو أكثر)\nمثال: `62581`',
         enter_count: '🔢 كم عدد الفيزات التي تريد تخمينها؟\n(الحد الأدنى 5، الحد الأقصى {max})',
         admin_unlimited: '\nللأدمن: لا يوجد حد أقصى.',
@@ -299,6 +304,7 @@ const t = {
         plan_pro: '🥈 Pro',
         plan_vip: '🥉 VIP',
         subscribe_confirm: '✅ اخترت خطة {plan}\nقم بتحويل {amount} USDT إلى معرف بايننس:\n`{payId}`\nواكتب هذا الكود في الملاحظات:\n`{code}`\nثم أرسل صورة التحويل هنا.',
+        payment_timeout: '⚠️ لم يتم إرسال صورة التحويل خلال 20 ثانية. يرجى إرسال صورة التحويل للتحقق من الدفعة.',
         payment_received: '📸 تم استلام الصورة. سيتم مراجعتها قريباً.',
         payment_approved: '🎉 تم تفعيل اشتراك {plan} بنجاح!',
         payment_rejected: '❌ تم رفض طلب الاشتراك.',
@@ -306,6 +312,48 @@ const t = {
         campaign_stopped: '🛑 تم إيقاف الحملة {id}.',
         no_active_campaigns: '⚠️ لا توجد حملات نشطة.',
         active_campaigns: '📋 *حملاي النشطة*\n'
+    },
+    en: {
+        choose_lang: 'Choose your language / اختر لغتك:',
+        lang_changed: '✅ Language changed to English',
+        main_menu: '✨ *Main Menu* ✨\nChoose an option:',
+        btn_guess: '🎲 Guess multiple cards',
+        btn_single: '🔍 Check single card',
+        btn_subscribe: '💎 Subscriptions',
+        btn_my_campaigns: '📋 My active campaigns',
+        cancel_btn: '❌ Cancel',
+        btn_copy_full: '📋 Copy full card',
+        btn_copy_num: '🔢 Copy number',
+        btn_copy_exp: '📅 Copy expiry',
+        btn_copy_cvv: '🔐 Copy CVV',
+        enter_bin: '📌 Send your BIN (first 6 digits or more)\nExample: `62581`',
+        enter_count: '🔢 How many cards to guess?\n(Min 5, Max {max})',
+        admin_unlimited: '\nFor admin: no upper limit.',
+        count_out_of_range: '⚠️ Count must be between 5 and {max}.',
+        cancel_msg: '❌ Operation cancelled.',
+        generating: '🔄 Generating card {current}/{total} {dots}\n━━━━━━━━━━━━━━\n📌 BIN: {bin}',
+        live_result: '✅ LIVE ✅\n----------------------------------------\n\n💳    {card}\n\n📊 Status: LIVE ✅\n\n🏦 Type: {type}\n\n🌍 Country: {country} {flag}\n\n----------------------------------------\nBy: @pe8bot',
+        no_live_found: '😞 No live cards found out of {total}.',
+        new_campaign_btn: '🚀 Start new campaign',
+        summary: '📊 *Final Summary*\n✅ Live: {hit}\n🎯 Total: {total}',
+        single_invalid: '📌 Send the full card in this format:\n`4111111111111111|01|2031|123`',
+        single_checking: '⏳ Checking card...',
+        api_error: '⚠️ API error. Please try again later.',
+        unknown: 'Unknown',
+        not_admin: '⛔ This command is for admins only.',
+        subscription_plans: '💎 *Subscription Plans*\nChoose your plan:',
+        plan_plus: '🥇 Plus',
+        plan_pro: '🥈 Pro',
+        plan_vip: '🥉 VIP',
+        subscribe_confirm: '✅ You selected {plan} plan\nPlease send {amount} USDT to Binance ID:\n`{payId}`\nAnd write this code in the memo:\n`{code}`\nThen send the payment proof photo here.',
+        payment_timeout: '⚠️ No payment proof received within 20 seconds. Please send the payment proof photo to verify.',
+        payment_received: '📸 Payment proof received. It will be reviewed soon.',
+        payment_approved: '🎉 Your {plan} subscription has been activated!',
+        payment_rejected: '❌ Subscription request rejected.',
+        campaigns_limit_reached: '⚠️ You have reached the maximum concurrent campaigns ({limit}).',
+        campaign_stopped: '🛑 Campaign {id} stopped.',
+        no_active_campaigns: '⚠️ No active campaigns.',
+        active_campaigns: '📋 *Your active campaigns*\n'
     }
 };
 
@@ -313,7 +361,8 @@ const t = {
 // دوال إدارة الحملات والتخمين
 // ==========================================
 async function runCampaign(chatId, campaignId, bin, total) {
-    const dict = t.ar;
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     let progressMsg = await bot.sendMessage(chatId, dict.generating.replace('{current}',0).replace('{total}',total).replace('{dots}','.').replace('{bin}',bin));
     let hit = 0;
     for (let i=1; i<=total; i++) {
@@ -334,7 +383,7 @@ async function runCampaign(chatId, campaignId, bin, total) {
             const flag = getFlag(result.country);
             const cardType = getCardType(fullVisa.split('|')[0]);
             const liveText = dict.live_result.replace('{card}',fullVisa).replace('{type}',cardType).replace('{country}',result.country).replace('{flag}',flag);
-            const buttons = getCopyButtons(fullVisa);
+            const buttons = getCopyButtons(fullVisa, lang);
             await bot.sendMessage(chatId, liveText, { parse_mode: 'Markdown', ...buttons });
         }
         updateCampaign(campaignId, i, hit, 'running');
@@ -356,8 +405,10 @@ async function startNewCampaign(chatId, bin, total) {
     const planName = subscriber.plan;
     const campaignsLimit = PLANS[planName].campaignsLimit;
     const active = getUserActiveCampaigns(chatId);
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     if (active.length >= campaignsLimit) {
-        await bot.sendMessage(chatId, t.ar.campaigns_limit_reached.replace('{limit}', campaignsLimit));
+        await bot.sendMessage(chatId, dict.campaigns_limit_reached.replace('{limit}', campaignsLimit));
         return;
     }
     const campaignId = createCampaign(chatId, bin, total);
@@ -368,25 +419,29 @@ async function startNewCampaign(chatId, bin, total) {
 // معالجة الاشتراكات والدفع
 // ==========================================
 async function handleSubscription(chatId, plan) {
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     const code = generateRandomCode();
     createPendingPayment(chatId, plan, code);
-    const text = t.ar.subscribe_confirm.replace('{plan}',plan.toUpperCase()).replace('{amount}',PLANS[plan].price).replace('{payId}',BINANCE_PAY_ID).replace('{code}',code);
+    const text = dict.subscribe_confirm.replace('{plan}',plan.toUpperCase()).replace('{amount}',PLANS[plan].price).replace('{payId}',BINANCE_PAY_ID).replace('{code}',code);
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-    // بعد 15 ثانية نرسل رسالة فشل إذا لم يرسل صورة
+    
+    // المهلة 20 ثانية
     setTimeout(async () => {
         const pending = getPendingPayment(chatId, plan);
         if (pending && pending.status === 'waiting_payment') {
-            await bot.sendMessage(chatId, t.ar.api_error);
-            updatePendingPayment(pending.id, 'expired');
+            await bot.sendMessage(chatId, dict.payment_timeout);
+            // لا نغير الحالة حتى يرسل الصورة، فقط نذكره
         }
-    }, 15000);
+    }, 20000);
 }
 
 // ==========================================
 // عرض القوائم
 // ==========================================
 async function showMainMenu(chatId) {
-    const dict = t.ar;
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     const opts = {
         reply_markup: {
             inline_keyboard: [
@@ -402,7 +457,8 @@ async function showMainMenu(chatId) {
 }
 
 async function showSubscriptionMenu(chatId) {
-    const dict = t.ar;
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     const opts = {
         reply_markup: {
             inline_keyboard: [
@@ -417,7 +473,8 @@ async function showSubscriptionMenu(chatId) {
 }
 
 async function showMyCampaigns(chatId) {
-    const dict = t.ar;
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     const campaigns = getUserActiveCampaigns(chatId);
     if (campaigns.length === 0) {
         await bot.sendMessage(chatId, dict.no_active_campaigns);
@@ -426,7 +483,7 @@ async function showMyCampaigns(chatId) {
     let text = dict.active_campaigns;
     const buttons = [];
     for (const c of campaigns) {
-        text += `\n📌 BIN: ${c.bin} | تقدم: ${c.current}/${c.total} | صالحة: ${c.hit}`;
+        text += `\n📌 BIN: ${c.bin} | Progress: ${c.current}/${c.total} | Hits: ${c.hit}`;
         buttons.push([{ text: `${dict.campaign_stopped.split(' ')[0]} ${c.id}`, callback_data: `stop_camp_${c.id}` }]);
     }
     buttons.push([{ text: dict.new_campaign_btn, callback_data: 'menu_guess' }]);
@@ -443,37 +500,41 @@ bot.onText(/\/start/, async (msg) => {
             inline_keyboard: [[{ text: 'العربية', callback_data: 'lang_ar' }, { text: 'English', callback_data: 'lang_en' }]]
         }
     };
-    await bot.sendMessage(chatId, t.ar.choose_lang, opts);
+    await bot.sendMessage(chatId, translations.ar.choose_lang, opts);
 });
 
 bot.onText(/\/menu/, async (msg) => { await showMainMenu(msg.chat.id); });
 bot.onText(/\/cancel/, async (msg) => {
     const chatId = msg.chat.id;
     const state = guessState.get(chatId);
-    if (state) { state.cancelFlag = true; await bot.sendMessage(chatId, t.ar.cancel_msg); }
-    else await bot.sendMessage(chatId, '⚠️ لا توجد عملية نشطة.');
+    const dict = translations[userLang.get(chatId) || 'ar'];
+    if (state) { state.cancelFlag = true; await bot.sendMessage(chatId, dict.cancel_msg); }
+    else await bot.sendMessage(chatId, '⚠️ No active process.');
 });
 
 bot.onText(/\/addadmin (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
-    if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, t.ar.not_admin); return; }
+    const dict = translations[userLang.get(chatId) || 'ar'];
+    if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, dict.not_admin); return; }
     const id = parseInt(match[1]);
     if (isNaN(id)) return;
     adminSet.add(id);
-    await bot.sendMessage(chatId, `✅ تم إضافة أدمن ${id}`);
+    await bot.sendMessage(chatId, `✅ Added admin ${id}`);
 });
 bot.onText(/\/removeadmin (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
-    if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, t.ar.not_admin); return; }
+    const dict = translations[userLang.get(chatId) || 'ar'];
+    if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, dict.not_admin); return; }
     const id = parseInt(match[1]);
-    if (id === 643309456) { await bot.sendMessage(chatId, '⚠️ لا يمكن إزالة الأدمن الأساسي'); return; }
+    if (id === 643309456) { await bot.sendMessage(chatId, '⚠️ Cannot remove main admin'); return; }
     adminSet.delete(id);
-    await bot.sendMessage(chatId, `✅ تم إزالة أدمن ${id}`);
+    await bot.sendMessage(chatId, `✅ Removed admin ${id}`);
 });
 bot.onText(/\/admins/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, t.ar.not_admin); return; }
-    await bot.sendMessage(chatId, `📋 الأدمن: ${Array.from(adminSet).join(', ')}`);
+    const dict = translations[userLang.get(chatId) || 'ar'];
+    if (!adminSet.has(chatId)) { await bot.sendMessage(chatId, dict.not_admin); return; }
+    await bot.sendMessage(chatId, `📋 Admins: ${Array.from(adminSet).join(', ')}`);
 });
 
 // ==========================================
@@ -482,7 +543,8 @@ bot.onText(/\/admins/, async (msg) => {
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const data = query.data;
-    const dict = t.ar;
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
     await bot.answerCallbackQuery(query.id);
 
     // أزرار النسخ
@@ -508,8 +570,8 @@ bot.on('callback_query', async (query) => {
     }
 
     // اللغة
-    if (data === 'lang_ar') { userLang.set(chatId, 'ar'); await showMainMenu(chatId); return; }
-    if (data === 'lang_en') { userLang.set(chatId, 'en'); await showMainMenu(chatId); return; }
+    if (data === 'lang_ar') { userLang.set(chatId, 'ar'); await bot.sendMessage(chatId, translations.ar.lang_changed); await showMainMenu(chatId); return; }
+    if (data === 'lang_en') { userLang.set(chatId, 'en'); await bot.sendMessage(chatId, translations.en.lang_changed); await showMainMenu(chatId); return; }
 
     // القائمة الرئيسية
     if (data === 'menu_guess') {
@@ -571,13 +633,16 @@ bot.on('callback_query', async (query) => {
                     cardsLimit: PLANS[proof.plan].cardsLimit
                 });
                 updatePaymentProof(proofId, 'approved');
-                updatePendingPayment(getPendingPayment(proof.userId, proof.plan)?.id, 'approved');
-                await bot.sendMessage(proof.userId, t.ar.payment_approved.replace('{plan}', proof.plan.toUpperCase()));
-                await bot.sendMessage(chatId, `✅ تم تفعيل الاشتراك للمستخدم ${proof.userId}`);
+                const pending = getPendingPayment(proof.userId, proof.plan);
+                if (pending) updatePendingPayment(pending.id, 'approved');
+                const userDict = translations[userLang.get(proof.userId) || 'ar'];
+                await bot.sendMessage(proof.userId, userDict.payment_approved.replace('{plan}', proof.plan.toUpperCase()));
+                await bot.sendMessage(chatId, `✅ Subscription activated for user ${proof.userId}`);
             } else {
                 updatePaymentProof(proofId, 'rejected');
-                await bot.sendMessage(proof.userId, t.ar.payment_rejected);
-                await bot.sendMessage(chatId, `❌ تم رفض الاشتراك للمستخدم ${proof.userId}`);
+                const userDict = translations[userLang.get(proof.userId) || 'ar'];
+                await bot.sendMessage(proof.userId, userDict.payment_rejected);
+                await bot.sendMessage(chatId, `❌ Subscription rejected for user ${proof.userId}`);
             }
         }
         return;
@@ -590,22 +655,22 @@ bot.on('callback_query', async (query) => {
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
-    const dict = t.ar;
+    const lang = userLang.get(chatId) || 'ar';
+    const dict = translations[lang];
 
     // معالجة الصور (إثباتات الدفع)
     if (msg.photo) {
         const photo = msg.photo[msg.photo.length-1];
         const fileId = photo.file_id;
-        const pending = getPendingPayment(chatId, null); // نبحث عن أول طلب معلق
         const pendingItem = Object.values(loadData().pendingPayments).find(p => p.userId === chatId && p.status === 'waiting_payment');
         if (pendingItem) {
             const proof = createPaymentProof(chatId, pendingItem.plan, fileId, msg.message_id);
-            const caption = `📸 إثبات دفع جديد\nالمستخدم: ${chatId}\nالخطة: ${pendingItem.plan}\nالمبلغ: ${pendingItem.amount} USDT\nالكود: ${pendingItem.code}`;
+            const caption = `📸 New payment proof\nUser: ${chatId}\nPlan: ${pendingItem.plan}\nAmount: ${pendingItem.amount} USDT\nCode: ${pendingItem.code}`;
             const adminKeyboard = {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: '✅ موافقة', callback_data: `approve_payment_${proof.id}` }],
-                        [{ text: '❌ رفض', callback_data: `reject_payment_${proof.id}` }]
+                        [{ text: '✅ Approve', callback_data: `approve_payment_${proof.id}` }],
+                        [{ text: '❌ Reject', callback_data: `reject_payment_${proof.id}` }]
                     ]
                 }
             };
@@ -660,11 +725,11 @@ bot.on('message', async (msg) => {
             const flag = getFlag(result.country);
             const cardType = getCardType(text.split('|')[0]);
             const liveText = dict.live_result.replace('{card}',text).replace('{type}',cardType).replace('{country}',result.country).replace('{flag}',flag);
-            const buttons = getCopyButtons(text);
+            const buttons = getCopyButtons(text, lang);
             await bot.sendMessage(chatId, liveText, { parse_mode: 'Markdown', ...buttons });
         }
         return;
     }
 });
 
-console.log('✅ البوت يعمل الآن بشكل كامل مع تخزين JSON (بدون sqlite3).');
+console.log('✅ البوت يعمل الآن مع دعم كامل للغتين، حملتين للمجاني، ومهلة 20 ثانية للدفع.');
