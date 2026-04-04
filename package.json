@@ -1,5 +1,5 @@
 {
-  "name": "telegram-cc-checker",
+  "name": "node index.js",
   "version": "1.0.0",
   "main": "bot.js",
   "dependencies": {
