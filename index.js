@@ -11,14 +11,8 @@ if (!TOKEN) {
     process.exit(1);
 }
 
-const bot = new TelegramBot(TOKEN, { 
-    polling: {
-        interval: 300,
-        autoStart: true,
-        params: { timeout: 10 }
-    } 
-});
-
+// إعداد البوت مع الوكلاء لتخفيف الضغط ومنع التهنيج
+const bot = new TelegramBot(TOKEN, { polling: { interval: 300, autoStart: true, params: { timeout: 10 } } });
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 2000, maxFreeSockets: 256, timeout: 60000 });
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 2000, maxFreeSockets: 256, timeout: 60000, rejectUnauthorized: false });
 
@@ -45,10 +39,10 @@ function getPlans() {
     const data = loadData();
     if (!data.plans) {
         data.plans = {
-            free: { nameAr: 'مجاني', nameEn: 'Free', price: 0, cardsLimit: 40, campaignsLimit: 2, speed: 5, desc: "الخطة الأساسية لتجربة البوت." },
-            plus: { nameAr: 'Plus', nameEn: 'Plus', price: 3, cardsLimit: 500, campaignsLimit: 4, speed: 30, desc: "خطة اقتصادية للمستخدم المتوسط مع سرعة جيدة." },
-            pro: { nameAr: 'Pro', nameEn: 'Pro', price: 5, cardsLimit: 1500, campaignsLimit: 6, speed: 60, desc: "خطة المحترفين، سرعة عالية وحدود كبيرة." },
-            vip: { nameAr: 'VIP', nameEn: 'VIP', price: 8, cardsLimit: 3000, campaignsLimit: 10, speed: 100, desc: "الخطة الأقوى، سرعة قصوى وأعلى حدود ممكنة." }
+            free: { nameAr: 'مجاني', nameEn: 'Free', price: 0, cardsLimit: 40, campaignsLimit: 2, speed: 5, desc: "الخطة الأساسية والمجانية لتجربة خدمات البوت." },
+            plus: { nameAr: 'Plus', nameEn: 'Plus', price: 3, cardsLimit: 500, campaignsLimit: 4, speed: 30, desc: "خطة ممتازة للمبتدئين، توفر سرعة متوسطة وحدود مناسبة." },
+            pro: { nameAr: 'Pro', nameEn: 'Pro', price: 5, cardsLimit: 1500, campaignsLimit: 6, speed: 60, desc: "خطة المحترفين، تمنحك سرعة عالية جداً وحدود فحص كبيرة." },
+            vip: { nameAr: 'VIP', nameEn: 'VIP', price: 8, cardsLimit: 3000, campaignsLimit: 10, speed: 100, desc: "أعلى باقة في البوت، سرعة خيالية وأعلى حدود ممكنة لجميع الميزات." }
         };
         saveData(data);
     }
@@ -90,8 +84,8 @@ function updatePaymentProof(id, status) { const d = loadData(); const idx = d.pa
 // ==========================================
 const userLang = new Map();
 const adminSet = new Set([643309456]);
-const userStates = new Map();
-const activeJobs = new Map();
+const userStates = new Map();          // { step, bins, defaultCount, progressMsgId, campaignsData, cancelFlag, plan, code }
+const activeJobs = new Map();          // مفتاح chatId -> { cancel: false }
 const BINANCE_PAY_ID = '842505320';
 
 // ==========================================
@@ -121,6 +115,7 @@ async function checkSingleCard(cardString, chatId, isSilent=false, retries=2) {
         return { isLive:live, status:d.status||'غير معروف', message:(d.message||'').replace(/احذفها/gi,'').trim(), type:(d.card&&d.card.type)||getCardType(cardString.split('|')[0]), country:(d.card&&d.card.country&&d.card.country.name)||'غير معروف' }; 
     } catch(e){ 
         if(retries>0){ await new Promise(res => setTimeout(res, 2000)); return checkSingleCard(cardString,chatId,isSilent,retries-1); } 
+        if(!isSilent){ const l=userLang.get(chatId)||'ar'; await bot.sendMessage(chatId,translations[l].api_error).catch(()=>{}); }
         return { isLive: false }; 
     } 
 }
@@ -140,7 +135,7 @@ function buildProgressText(campaignsData, speedPercent) {
 }
 
 // ==========================================
-// منطق الاشتراك الجديد
+// منطق شروحات الاشتراك
 // ==========================================
 async function showPlanDetails(chatId, planKey) {
     const lang = userLang.get(chatId) || 'ar';
@@ -149,12 +144,12 @@ async function showPlanDetails(chatId, planKey) {
     const p = plans[planKey];
     if (!p) return;
 
-    const text = `💎 *${p[`name${lang==='ar'?'Ar':'En'}`]}*\n\n` +
+    const text = `💎 *خطة ${p[`name${lang==='ar'?'Ar':'En'}`]}*\n\n` +
                  `📝 ${p.desc}\n\n` +
                  `💰 السعر: ${p.price} USDT\n` +
-                 `💳 حد البطاقات: ${p.cardsLimit}\n` +
+                 `💳 حد البطاقات للحملة: ${p.cardsLimit}\n` +
                  `🚀 السرعة: ${p.speed}%\n` +
-                 `📊 حد الحملات: ${p.campaignsLimit}`;
+                 `📊 الحملات المتزامنة: ${p.campaignsLimit}`;
 
     const kb = { inline_keyboard: [[
         { text: dict.cancel_btn, callback_data: 'menu_subscribe' },
@@ -167,7 +162,14 @@ async function showPlanDetails(chatId, planKey) {
 async function handleConfirmSubscription(chatId, planKey) {
     const lang = userLang.get(chatId) || 'ar';
     const dict = translations[lang];
+    const subscriber = getSubscriber(chatId);
     const plans = getPlans();
+    
+    if (subscriber.plan === planKey) {
+        await bot.sendMessage(chatId, dict.already_subscribed.replace('{plan}', plans[planKey][`name${lang==='ar'?'Ar':'En'}`]));
+        return;
+    }
+
     const p = plans[planKey];
     const code = genRandomCode();
     createPendingPayment(chatId, planKey, code);
@@ -183,20 +185,21 @@ async function handleConfirmSubscription(chatId, planKey) {
 }
 
 async function verifyBinancePayment(chatId, planKey, code) {
+    // محاكاة التحقق من الدفعة (سنفترض الفشل للذهاب لخيار الصورة كما طلبت)
     const isSuccess = false; 
 
     if (isSuccess) {
         const end = new Date(); end.setMonth(end.getMonth() + 1);
         updateSubscriber(chatId, { plan: planKey, startDate: new Date().toISOString(), endDate: end.toISOString() });
-        await bot.sendMessage(chatId, `✅ تم التحقق بنجاح وتفعيل عضوية ${planKey}!`);
+        await bot.sendMessage(chatId, `✅ تم تفعيل العضوية بنجاح!`);
     } else {
-        await bot.sendMessage(chatId, `❌ لم يتم العثور على الدفعة تلقائياً.\n\nتم الرفض، يرجى إرسال صورة التحويل ليتم تفعيلها يدوياً.`);
+        await bot.sendMessage(chatId, `❌ تم الرفض، يرجى إرسال صورة التحويل`);
         userStates.set(chatId, { step: 'awaiting_payment_proof', plan: planKey, code: code });
     }
 }
 
 // ==========================================
-// تشغيل الحملات
+// تشغيل حملات متعددة بالتوازي
 // ==========================================
 async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) {
     const subscriber = getSubscriber(chatId);
@@ -212,7 +215,7 @@ async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) 
     }
 
     if (activeJobs.has(chatId)) {
-        await bot.sendMessage(chatId, '⚠️ هناك حملات جارية حالياً.');
+        await bot.sendMessage(chatId, '⚠️ هناك حملات جارية حالياً. استخدم /cancel أولاً.');
         return;
     }
     activeJobs.set(chatId, { cancel: false });
@@ -227,20 +230,27 @@ async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) 
         reply_markup: { inline_keyboard: [[{ text: '❌ إلغاء الحملات', callback_data: 'cancel_all_campaigns' }]] }
     });
 
+    // تثبيت الرسالة كما طلبت
     try {
         await bot.pinChatMessage(chatId, progressMsg.message_id, { disable_notification: true });
     } catch (e) {
-        console.error('Error pinning message:', e);
+        console.error('Error pinning progress message:', e);
     }
 
     let lastEdit = 0;
     const updateProgress = async (force = false) => {
         if (activeJobs.get(chatId)?.cancel && !force) return;
         const now = Date.now();
-        if (!force && now - lastEdit < 4000) return; 
+        if (!force && now - lastEdit < 3500) return; 
         lastEdit = now;
         const newText = buildProgressText(campaignsData, speedPercent);
-        try { await bot.editMessageText(newText, { chat_id: chatId, message_id: progressMsg.message_id, reply_markup: { inline_keyboard: [[{ text: '❌ إلغاء الحملات', callback_data: 'cancel_all_campaigns' }]] } }); } catch(e) {}
+        try { 
+            await bot.editMessageText(newText, { 
+                chat_id: chatId, 
+                message_id: progressMsg.message_id, 
+                reply_markup: { inline_keyboard: [[{ text: '❌ إلغاء الحملات', callback_data: 'cancel_all_campaigns' }]] } 
+            }); 
+        } catch(e) {}
     };
 
     const runSingle = async (camp) => {
@@ -272,7 +282,8 @@ async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) 
                     if (res && res.isLive) {
                         portHit++; camp.hit++;
                         const flag = getFlag(res.country);
-                        const liveText = dict.live_result.replace('{card}', batch[j]).replace('{type}', getCardType(batch[j].split('|')[0])).replace('{country}', res.country).replace('{flag}', flag);
+                        const cardType = getCardType(batch[j].split('|')[0]);
+                        const liveText = dict.live_result.replace('{card}', batch[j]).replace('{type}', cardType).replace('{country}', res.country).replace('{flag}', flag);
                         await bot.sendMessage(chatId, liveText, { parse_mode: 'Markdown', ...getCopyButtons(batch[j], userLang.get(chatId)||'ar') }).catch(() => {});
                     }
                 }
@@ -288,10 +299,22 @@ async function runMultipleCampaignsParallel(chatId, binsList, totalCardsPerBin) 
     await Promise.all(campaignsData.map(c => runSingle(c)));
     await updateProgress(true);
     
+    // إزالة التثبيت وحذف الرسالة بعد الانتهاء
     try { await bot.unpinChatMessage(chatId, { message_id: progressMsg.message_id }); } catch(e) {}
     try { await bot.deleteMessage(chatId, progressMsg.message_id); } catch(e) {}
     
     activeJobs.delete(chatId);
+    
+    const totalHits = campaignsData.reduce((acc, curr) => acc + curr.hit, 0);
+    const totalRequested = binsList.length * totalCardsPerBin;
+    if (totalHits === 0) {
+        const noLive = dict.no_live_found.replace('{total}', totalRequested);
+        const keyboard = { reply_markup: { inline_keyboard: [[{ text: dict.new_campaign_btn, callback_data: 'menu_guess' }]] } };
+        await bot.sendMessage(chatId, noLive, keyboard);
+    } else {
+        await bot.sendMessage(chatId, dict.summary.replace('{hit}', totalHits).replace('{total}', totalRequested));
+    }
+
     userStates.delete(chatId);
 }
 
@@ -312,29 +335,81 @@ async function showSubscriptionMenu(chatId) {
     await bot.sendMessage(chatId, dict.subscription_plans, { reply_markup: { inline_keyboard: btns } });
 }
 
-bot.onText(/\/start/, async (msg) => { const cid=msg.chat.id; await bot.sendMessage(cid, 'Choose language:', { reply_markup:{ inline_keyboard:[[{text:'العربية',callback_data:'lang_ar'},{text:'English',callback_data:'lang_en'}]] } }); });
+async function showMyCampaigns(chatId) {
+    const lang=userLang.get(chatId)||'ar', dict=translations[lang], camps=getUserActiveCampaigns(chatId);
+    if(camps.length===0){ await bot.sendMessage(chatId, dict.no_active_campaigns); return; }
+    let txt=dict.active_campaigns; const btns=[];
+    for(const c of camps){ txt+=`\n📌 BIN: ${c.bin} | Progress: ${c.current}/${c.total} | Hits: ${c.hit}`; btns.push([{text:`${dict.campaign_stopped.split(' ')[0]} ${c.id}`,callback_data:`stop_camp_${c.id}`}]); }
+    btns.push([{text:dict.new_campaign_btn,callback_data:'menu_guess'}]);
+    await bot.sendMessage(chatId, txt, { reply_markup: { inline_keyboard: btns } });
+}
+
+async function showAdminPanel(chatId) {
+    await bot.sendMessage(chatId, '⚙️ لوحة تحكم الأدمن', { reply_markup: { inline_keyboard: [
+        [{text:'💰 تعديل الأسعار',callback_data:'admin_edit_prices'}],[{text:'⚡ تعديل السرعة',callback_data:'admin_edit_speed'}],[{text:'➕ إضافة خطة جديدة',callback_data:'admin_add_plan'}],[{text:'🎁 منح اشتراك',callback_data:'admin_grant'}],[{text:'❌ إلغاء اشتراك',callback_data:'admin_remove'}],[{text:'📋 عرض الأعضاء',callback_data:'admin_list'}],[{text:'🔙 رجوع',callback_data:'main_menu'}]
+    ] } });
+}
+
+// ==========================================
+// أوامر البوت
+// ==========================================
+bot.onText(/\/start/, async (msg) => { const cid=msg.chat.id; await bot.sendMessage(cid, 'اختر لغتك / Choose your language:', { reply_markup:{ inline_keyboard:[[{text:'العربية',callback_data:'lang_ar'},{text:'English',callback_data:'lang_en'}]] } }); });
 bot.onText(/\/menu/, async (msg) => { await showMainMenu(msg.chat.id); });
 bot.onText(/\/cancel/, async (msg) => { const cid=msg.chat.id; if(activeJobs.has(cid)){ activeJobs.get(cid).cancel=true; activeJobs.delete(cid); await bot.sendMessage(cid, '❌ تم إلغاء جميع الحملات الجارية.'); } else await bot.sendMessage(cid, '⚠️ لا توجد حملات نشطة.'); });
+bot.onText(/\/addadmin (.+)/, async (msg, match) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; const id=parseInt(match[1]); if(!isNaN(id)) adminSet.add(id); await bot.sendMessage(cid, `✅ تم إضافة أدمن ${id}`); });
+bot.onText(/\/removeadmin (.+)/, async (msg, match) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; const id=parseInt(match[1]); if(id===643309456){ await bot.sendMessage(cid,'⚠️ لا يمكن إزالة الأدمن الأساسي'); return; } adminSet.delete(id); await bot.sendMessage(cid,`✅ تم إزالة أدمن ${id}`); });
+bot.onText(/\/admins/, async (msg) => { const cid=msg.chat.id; if(!adminSet.has(cid)) return; await bot.sendMessage(cid, `📋 الأدمن: ${Array.from(adminSet).join(', ')}`); });
 
+// ==========================================
+// معالجة الأزرار (إرجاع كافة الأزرار المحذوفة)
+// ==========================================
 bot.on('callback_query', async (query) => {
     const cid=query.message.chat.id, data=query.data, lang=userLang.get(cid)||'ar', dict=translations[lang];
     await bot.answerCallbackQuery(query.id).catch(() => {});
     
+    // أزرار النسخ
+    if(data.startsWith('copy_full_')){ await bot.sendMessage(cid,`\`${data.replace('copy_full_','')}\``,{parse_mode:'Markdown'}); return; }
+    if(data.startsWith('copy_num_')){ await bot.sendMessage(cid,`\`${data.replace('copy_num_','')}\``,{parse_mode:'Markdown'}); return; }
+    if(data.startsWith('copy_exp_')){ await bot.sendMessage(cid,`\`${data.replace('copy_exp_','')}\``,{parse_mode:'Markdown'}); return; }
+    if(data.startsWith('copy_cvv_')){ await bot.sendMessage(cid,`\`${data.replace('copy_cvv_','')}\``,{parse_mode:'Markdown'}); return; }
+    
+    // إعدادات اللغة
+    if(data==='lang_ar'){ userLang.set(cid,'ar'); await bot.sendMessage(cid,'✅ تم تغيير اللغة إلى العربية'); await showMainMenu(cid); return; }
+    if(data==='lang_en'){ userLang.set(cid,'en'); await bot.sendMessage(cid,'✅ Language changed to English'); await showMainMenu(cid); return; }
+    
+    // القوائم الرئيسية
+    if(data==='main_menu'){ await showMainMenu(cid); return; }
+    if(data==='menu_guess'){ userStates.set(cid,{step:'awaiting_bin',bins:[],defaultCount:null}); await bot.sendMessage(cid, dict.enter_bin, { parse_mode:'Markdown' }); return; }
+    if(data==='menu_single'){ await bot.sendMessage(cid, dict.single_invalid, { parse_mode:'Markdown' }); return; }
+    if(data==='menu_subscribe'){ await showSubscriptionMenu(cid); return; }
+    if(data==='menu_my_campaigns'){ await showMyCampaigns(cid); return; }
+    
+    // التخمين والإعدادات
+    if(data==='add_another_bin'){ const st=userStates.get(cid); if(st && st.step==='awaiting_decision'){ const sub=getSubscriber(cid), plans=getPlans(), maxC=plans[sub.plan].campaignsLimit; if(st.bins.length>=maxC){ await bot.sendMessage(cid, `⚠️ لقد وصلت إلى الحد الأقصى للحملات المتزامنة (${maxC}). قم بترقية خطتك.`, { reply_markup:{ inline_keyboard:[[{text:'🚀 تطوير اشتراكك',callback_data:'menu_subscribe'}]] } }); return; } st.step='awaiting_bin'; await bot.sendMessage(cid,'📌 أرسل الـ BIN التالي:'); } return; }
+    if(data==='set_default_count'){ const st=userStates.get(cid); if(st && st.bins.length>0){ st.step='awaiting_default_count'; await bot.sendMessage(cid,'🔢 أدخل العدد الذي تريد تخمينه لكل حملة:'); } else await bot.sendMessage(cid,'⚠️ يرجى إدخال BIN أولاً.'); return; }
+    if(data==='start_with_default' || data==='start_campaigns'){ const st=userStates.get(cid); if(st && st.bins.length>0 && st.defaultCount){ st.step='running'; await runMultipleCampaignsParallel(cid, st.bins, st.defaultCount); } else { await bot.sendMessage(cid,'⚠️ خطأ في الإدخال، يرجى البدء من جديد عبر القائمة.'); } return; }
+    if(data==='cancel_all_campaigns'){ if(activeJobs.has(cid)){ activeJobs.get(cid).cancel=true; await bot.sendMessage(cid,'❌ تم إلغاء الحملات.'); } return; }
+    if(data==='cancel_guess'){ userStates.delete(cid); await bot.sendMessage(cid, dict.cancel_msg); return; }
+    if(data.startsWith('stop_camp_')){ const campId=parseFloat(data.split('_')[2]); updateCampaign(campId,null,null,'stopped'); await bot.sendMessage(cid, dict.campaign_stopped.replace('{id}',campId)); await showMyCampaigns(cid); return; }
+    
+    // الاشتراكات (النظام الجديد)
     if(data.startsWith('view_plan_')) { await showPlanDetails(cid, data.replace('view_plan_', '')); return; }
     if(data.startsWith('confirm_sub_')) { await handleConfirmSubscription(cid, data.replace('confirm_sub_', '')); return; }
     if(data.startsWith('verify_pay_')) { const pts=data.split('_'); await verifyBinancePayment(cid, pts[2], pts[3]); return; }
-    if(data==='main_menu'){ await showMainMenu(cid); return; }
-    if(data==='menu_guess'){ userStates.set(cid,{step:'awaiting_bin',bins:[],defaultCount:null}); await bot.sendMessage(cid, dict.enter_bin, { parse_mode:'Markdown' }); return; }
-    if(data==='menu_subscribe'){ await showSubscriptionMenu(cid); return; }
-    if(data==='menu_my_campaigns'){ 
-        const camps=getUserActiveCampaigns(cid);
-        if(camps.length===0){ await bot.sendMessage(cid, dict.no_active_campaigns); return; }
-        let txt=dict.active_campaigns; const btns=[];
-        for(const c of camps){ txt+=`\n📌 BIN: ${c.bin} | ${c.current}/${c.total}`; btns.push([{text:`إيقاف ${c.id}`,callback_data:`stop_camp_${c.id}`}]); }
-        await bot.sendMessage(cid, txt, { reply_markup: { inline_keyboard: btns } });
-        return; 
-    }
+    if(data.startsWith('sub_')){ await showPlanDetails(cid, data.replace('sub_','')); return; } // لتوافق الإصدار القديم
+    
+    // لوحة الأدمن (النظام القديم المحذوف)
+    if(data==='admin_panel'){ if(!adminSet.has(cid)) return; await showAdminPanel(cid); return; }
+    if(data==='admin_edit_prices'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_edit_price'}); await bot.sendMessage(cid,'أرسل الخطة والسعر الجديد بالصيغة: plan=price\nمثال: plus=4'); return; }
+    if(data==='admin_edit_speed'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_edit_speed'}); await bot.sendMessage(cid,'أرسل الخطة والسرعة الجديدة بالصيغة: plan=speed\nمثال: pro=80'); return; }
+    if(data==='admin_add_plan'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_add_plan'}); await bot.sendMessage(cid,'أرسل تفاصيل الخطة: name_ar|name_en|price|cardsLimit|campaignsLimit|speed\nمثال: ماكس|MAX|10|500|10|100'); return; }
+    if(data==='admin_grant'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_grant'}); await bot.sendMessage(cid,'أرسل: user_id plan\nمثال: 123456789 plus'); return; }
+    if(data==='admin_remove'){ if(!adminSet.has(cid)) return; userStates.set(cid,{step:'admin_remove'}); await bot.sendMessage(cid,'أرسل معرف المستخدم'); return; }
+    if(data==='admin_list'){ if(!adminSet.has(cid)) return; const subs=getAllSubscribers(); let msg='📋 قائمة الأعضاء:\n'; for(const [id,sub] of Object.entries(subs)) msg+=`🆔 ${id} | خطة: ${sub.plan} | ينتهي: ${sub.endDate}\n`; await bot.sendMessage(cid, msg); return; }
+    
+    // موافقة / رفض الدفع
     if(data.startsWith('approve_payment_') || data.startsWith('reject_payment_')){
+        if(!adminSet.has(cid)) return;
         const parts=data.split('_'), action=parts[0], proofId=parseFloat(parts[2]), proof=getPaymentProof(proofId);
         if(proof){
             try { 
@@ -345,53 +420,31 @@ bot.on('callback_query', async (query) => {
                 const end=new Date(); end.setMonth(end.getMonth()+1);
                 updateSubscriber(proof.userId,{plan:proof.plan,startDate:new Date().toISOString(),endDate:end.toISOString()});
                 updatePaymentProof(proofId,'approved');
-                await bot.sendMessage(proof.userId, translations[userLang.get(proof.userId)||'ar'].payment_approved);
-                await bot.sendMessage(cid, `✅ تمت الموافقة لـ ${proof.userId}`);
+                const ul = userLang.get(proof.userId)||'ar';
+                await bot.sendMessage(proof.userId, translations[ul].payment_approved);
+                await bot.sendMessage(cid, `✅ تمت الموافقة وتفعيل الاشتراك للمستخدم ${proof.userId}`);
             } else {
                 updatePaymentProof(proofId,'rejected');
-                await bot.sendMessage(proof.userId, translations[userLang.get(proof.userId)||'ar'].payment_rejected);
-                await bot.sendMessage(cid, `❌ تم الرفض لـ ${proof.userId}`);
+                const ul = userLang.get(proof.userId)||'ar';
+                await bot.sendMessage(proof.userId, translations[ul].payment_rejected);
+                await bot.sendMessage(cid, `❌ تم الرفض للمستخدم ${proof.userId}`);
             }
         }
         return;
     }
-    
-    if(data==='start_with_default'){ 
-        const st=userStates.get(cid); 
-        if(st && st.bins.length>0 && st.defaultCount) {
-            await runMultipleCampaignsParallel(cid, st.bins, st.defaultCount); 
-        } else {
-            await bot.sendMessage(cid, '⚠️ انتهت الجلسة أو هناك خطأ في الإدخال، يرجى البدء من جديد عبر /menu');
-        }
-        return; 
-    }
-    
-    if(data==='add_another_bin'){ 
-        const st = userStates.get(cid);
-        if (st) {
-            st.step='awaiting_bin'; 
-            await bot.sendMessage(cid,'📌 أرسل BIN آخر:'); 
-        } else {
-            await bot.sendMessage(cid, '⚠️ انتهت الجلسة. يرجى البدء من جديد.');
-        }
-        return; 
-    }
-    
-    if(data==='cancel_all_campaigns'){ 
-        if(activeJobs.has(cid)) {
-            activeJobs.get(cid).cancel=true; 
-            await bot.sendMessage(cid, '❌ جاري إلغاء الحملة...');
-        }
-        return; 
-    }
 });
 
+// ==========================================
+// معالجة الرسائل النصية والصور (إرجاع كافة حالات الأدمن)
+// ==========================================
 bot.on('message', async (msg) => {
     const cid=msg.chat.id, text=msg.text, state=userStates.get(cid);
     if(text && text.startsWith('/')) return;
+    const lang=userLang.get(cid)||'ar', dict=translations[lang];
 
+    // استلام صورة التحويل بناءً على طلبك
     if(msg.photo && state && state.step === 'awaiting_payment_proof') {
-        const adminId = adminSet.values().next().value;
+        const adminId = adminSet.values().next().value; // إرسال لأول أدمن
         if(adminId) {
             const fileId = msg.photo[msg.photo.length-1].file_id;
             const adminMsg = await bot.sendPhoto(adminId, fileId, {
@@ -401,86 +454,230 @@ bot.on('message', async (msg) => {
             const proof = createPaymentProof(cid, state.plan, fileId, msg.message_id, adminMsg.message_id);
             await bot.editMessageReplyMarkup({ inline_keyboard: [[{text:'✅ موافقة',callback_data:`approve_payment_${proof.id}`},{text:'❌ رفض',callback_data:`reject_payment_${proof.id}`}]] }, { chat_id: adminId, message_id: adminMsg.message_id });
             
+            // تثبيت الرسالة عند الطرفين كما طلبت
             try { await bot.pinChatMessage(cid, msg.message_id, { disable_notification: true }); } catch(e){}
             try { await bot.pinChatMessage(adminId, adminMsg.message_id, { disable_notification: true }); } catch(e){}
             
-            await bot.sendMessage(cid, translations[userLang.get(cid)||'ar'].payment_received);
+            await bot.sendMessage(cid, dict.payment_received);
             userStates.delete(cid);
         }
         return;
     }
 
+    // انتظار BIN
     if(state && state.step==='awaiting_bin'){
-        if(/^\d{5,16}/.test(text)){
-            state.currentBin=text.slice(0,6);
+        if(/^\d+$/.test(text)){
+            let bin=text.slice(0,6); while(bin.length<6) bin+=Math.floor(Math.random()*10);
+            state.currentBin=bin;
             if(state.defaultCount){
-                state.bins.push(state.currentBin);
-                await bot.sendMessage(cid, `✅ أضيف BIN: ${state.currentBin}`, { reply_markup: { inline_keyboard: [[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'➕ BIN آخر',callback_data:'add_another_bin'}]] } });
+                state.bins.push(bin);
+                await bot.sendMessage(cid, `✅ تم إضافة BIN: ${bin} بعدد فيزات ${state.defaultCount}\nالحملات الحالية: ${state.bins.length}`);
+                const plans=getPlans(), subscriber=getSubscriber(cid), maxC=plans[subscriber.plan].campaignsLimit;
+                let btns=[];
+                if(state.bins.length>=maxC) btns=[[{text:'🚀 تطوير اشتراكك',callback_data:'menu_subscribe'}],[{text:'🎯 تعيين العدد الافتراضي',callback_data:'set_default_count'}],[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'❌ إلغاء',callback_data:'cancel_guess'}]];
+                else btns=[[{text:'➕ إرسال BIN آخر',callback_data:'add_another_bin'}],[{text:'🎯 تعيين العدد الافتراضي',callback_data:'set_default_count'}],[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'❌ إلغاء',callback_data:'cancel_guess'}]];
+                await bot.sendMessage(cid, 'ماذا تريد أن تفعل؟', { reply_markup:{ inline_keyboard:btns } });
                 state.step='awaiting_decision';
             } else {
                 state.step='awaiting_count';
-                await bot.sendMessage(cid, `🔢 كم عدد الفيزات لـ ${state.currentBin}؟`);
+                await bot.sendMessage(cid, `🔢 كم عدد الفيزات التي تريد تخمينها على BIN: ${bin}؟\n(الحد الأدنى 5، الحد الأقصى ${getSubscriber(cid).cardsLimit})`);
             }
         }
         return;
     }
+
+    // انتظار العدد للحملة
     if(state && state.step==='awaiting_count'){
         const count=parseInt(text);
-        if(!isNaN(count) && count >= 5){
-            state.bins.push(state.currentBin); state.defaultCount=count; state.step='awaiting_decision';
-            await bot.sendMessage(cid, `✅ تم الإعداد بنجاح.`, { reply_markup: { inline_keyboard: [[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'➕ BIN آخر',callback_data:'add_another_bin'}]] } });
+        if(isNaN(count)){ await bot.sendMessage(cid,'⚠️ يرجى إرسال رقم صحيح.'); return; }
+        const subscriber=getSubscriber(cid), maxCards=subscriber.cardsLimit;
+        if(!adminSet.has(cid) && (count<5 || count>maxCards)){
+            await bot.sendMessage(cid, dict.count_out_of_range.replace('{max}',maxCards));
+            await bot.sendMessage(cid, '⚠️ أنت في الخطة الحالية. قم بترقية خطتك.', { reply_markup:{ inline_keyboard:[[{text:'💎 عرض الاشتراكات',callback_data:'menu_subscribe'}]] } });
+            state.step='awaiting_bin';
+            return;
+        }
+        state.bins.push(state.currentBin);
+        state.defaultCount=count;
+        delete state.currentBin;
+        await bot.sendMessage(cid, `✅ تم إضافة BIN: ${state.bins[state.bins.length-1]} بعدد فيزات ${count}\nالحملات الحالية: ${state.bins.length}\nالعدد الافتراضي أصبح ${count}.`);
+        const plans=getPlans(), maxC=plans[subscriber.plan].campaignsLimit;
+        let btns=[];
+        if(state.bins.length>=maxC) btns=[[{text:'🚀 تطوير اشتراكك',callback_data:'menu_subscribe'}],[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'❌ إلغاء',callback_data:'cancel_guess'}]];
+        else btns=[[{text:'➕ إرسال BIN آخر',callback_data:'add_another_bin'}],[{text:'🎯 تعيين العدد الافتراضي',callback_data:'set_default_count'}],[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'❌ إلغاء',callback_data:'cancel_guess'}]];
+        await bot.sendMessage(cid, 'ماذا تريد أن تفعل؟', { reply_markup:{ inline_keyboard:btns } });
+        state.step='awaiting_decision';
+        return;
+    }
+
+    // انتظار تعيين العدد الافتراضي
+    if(state && state.step==='awaiting_default_count'){
+        const count=parseInt(text);
+        if(isNaN(count)){ await bot.sendMessage(cid,'⚠️ يرجى إرسال رقم صحيح.'); return; }
+        const subscriber=getSubscriber(cid), maxCards=subscriber.cardsLimit;
+        if(!adminSet.has(cid) && (count<5 || count>maxCards)){
+            await bot.sendMessage(cid, dict.count_out_of_range.replace('{max}',maxCards));
+            return;
+        }
+        state.defaultCount=count;
+        await bot.sendMessage(cid, `✅ تم تعيين العدد الافتراضي للحملات إلى ${count}.`);
+        const plans=getPlans(), maxC=plans[subscriber.plan].campaignsLimit;
+        let btns=[];
+        if(state.bins.length>=maxC) btns=[[{text:'🚀 تطوير اشتراكك',callback_data:'menu_subscribe'}],[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'❌ إلغاء',callback_data:'cancel_guess'}]];
+        else btns=[[{text:'➕ إرسال BIN آخر',callback_data:'add_another_bin'}],[{text:'🎯 تعيين العدد الافتراضي',callback_data:'set_default_count'}],[{text:'🚀 بدء التخمين',callback_data:'start_with_default'}],[{text:'❌ إلغاء',callback_data:'cancel_guess'}]];
+        await bot.sendMessage(cid, 'ماذا تريد أن تفعل؟', { reply_markup:{ inline_keyboard:btns } });
+        state.step='awaiting_decision';
+        return;
+    }
+
+    // إرجاع أوامر الأدمن المحذوفة
+    if(state && state.step==='admin_edit_price'){
+        const parts=text.split('=');
+        if(parts.length!==2){ await bot.sendMessage(cid,'صيغة غير صحيحة'); return; }
+        const planKey=parts[0].trim(), newPrice=parseFloat(parts[1]);
+        if(isNaN(newPrice)){ await bot.sendMessage(cid,'السعر يجب أن يكون رقماً'); return; }
+        const plans=getPlans();
+        if(!plans[planKey]){ await bot.sendMessage(cid,`الخطة ${planKey} غير موجودة`); return; }
+        plans[planKey].price=newPrice; updatePlans(plans);
+        await bot.sendMessage(cid,`✅ تم تحديث سعر خطة ${planKey} إلى ${newPrice} USDT`);
+        userStates.delete(cid); await showAdminPanel(cid);
+        return;
+    }
+    if(state && state.step==='admin_edit_speed'){
+        const parts=text.split('=');
+        if(parts.length!==2){ await bot.sendMessage(cid,'صيغة غير صحيحة'); return; }
+        const planKey=parts[0].trim(), newSpeed=parseInt(parts[1]);
+        if(isNaN(newSpeed)||newSpeed<1||newSpeed>100){ await bot.sendMessage(cid,'السرعة بين 1 و 100'); return; }
+        const plans=getPlans();
+        if(!plans[planKey]){ await bot.sendMessage(cid,`الخطة ${planKey} غير موجودة`); return; }
+        plans[planKey].speed=newSpeed; updatePlans(plans);
+        await bot.sendMessage(cid,`✅ تم تحديث سرعة خطة ${planKey} إلى ${newSpeed}%`);
+        userStates.delete(cid); await showAdminPanel(cid);
+        return;
+    }
+    if(state && state.step==='admin_add_plan'){
+        const parts=text.split('|');
+        if(parts.length!==6){ await bot.sendMessage(cid,'صيغة غير صحيحة'); return; }
+        const [nameAr,nameEn,price,cardsLimit,campaignsLimit,speed]=parts;
+        const newPrice=parseFloat(price), newCards=parseInt(cardsLimit), newCamp=parseInt(campaignsLimit), newSpeed=parseInt(speed);
+        if(isNaN(newPrice)||isNaN(newCards)||isNaN(newCamp)||isNaN(newSpeed)){ await bot.sendMessage(cid,'جميع القيم يجب أن تكون أرقاماً'); return; }
+        const plans=getPlans(); const key=nameEn.toLowerCase();
+        plans[key]={nameAr,nameEn,price:newPrice,cardsLimit:newCards,campaignsLimit:newCamp,speed:newSpeed};
+        updatePlans(plans);
+        await bot.sendMessage(cid,`✅ تم إضافة خطة جديدة: ${nameAr}`);
+        userStates.delete(cid); await showAdminPanel(cid);
+        return;
+    }
+    if(state && state.step==='admin_grant'){
+        const parts=text.split(' ');
+        if(parts.length!==2){ await bot.sendMessage(cid,'صيغة غير صحيحة'); return; }
+        const userId=parseInt(parts[0]), planKey=parts[1];
+        const plans=getPlans();
+        if(!plans[planKey]){ await bot.sendMessage(cid,`الخطة ${planKey} غير موجودة`); return; }
+        const end=new Date(); end.setMonth(end.getMonth()+1);
+        updateSubscriber(userId,{plan:planKey,startDate:new Date().toISOString(),endDate:end.toISOString()});
+        await bot.sendMessage(cid,`✅ تم منح اشتراك ${planKey} للمستخدم ${userId}`);
+        userStates.delete(cid); await showAdminPanel(cid);
+        return;
+    }
+    if(state && state.step==='admin_remove'){
+        const userId=parseInt(text);
+        if(isNaN(userId)){ await bot.sendMessage(cid,'معرف غير صالح'); return; }
+        updateSubscriber(userId,{plan:'free',startDate:new Date().toISOString(),endDate:new Date(Date.now()+365*24*60*60*1000).toISOString()});
+        await bot.sendMessage(cid,`✅ تم إلغاء اشتراك المستخدم ${userId}`);
+        userStates.delete(cid); await showAdminPanel(cid);
+        return;
+    }
+
+    // فحص فيزا واحدة
+    if(text && text.includes('|')){
+        await bot.sendMessage(cid, dict.single_checking);
+        const result=await checkSingleCard(text,cid);
+        if(result && result.isLive){
+            const flag=getFlag(result.country);
+            const cardType=getCardType(text.split('|')[0]);
+            const liveText=dict.live_result.replace('{card}',text).replace('{type}',cardType).replace('{country}',result.country).replace('{flag}',flag);
+            const btns=getCopyButtons(text,lang);
+            await bot.sendMessage(cid, liveText, { parse_mode:'Markdown', ...btns });
+        } else {
+            await bot.sendMessage(cid, '❌ البطاقة ديك (DIE) أو خطأ في الفحص.');
         }
         return;
     }
-    if(text && text.includes('|')){
-        await bot.sendMessage(cid, translations[userLang.get(cid)||'ar'].single_checking);
-        const res=await checkSingleCard(text,cid);
-        if(res && res.isLive){
-            const flag=getFlag(res.country);
-            await bot.sendMessage(cid, translations[userLang.get(cid)||'ar'].live_result.replace('{card}',text).replace('{type}',getCardType(text)).replace('{country}',res.country).replace('{flag}',flag), { parse_mode:'Markdown', ...getCopyButtons(text,userLang.get(cid)||'ar') });
-        } else await bot.sendMessage(cid, '❌ البطاقة DIE.');
-    }
 });
 
+// ==========================================
+// الترجمات (تم إرجاع القاموس الكامل)
+// ==========================================
 const translations = {
     ar: {
-        main_menu: '✨ *القائمة الرئيسية* ✨',
+        main_menu: '✨ *القائمة الرئيسية* ✨\nاختر أحد الخيارين:',
         btn_guess: '🎲 تخمين مجموعة فيزات',
         btn_single: '🔍 فحص فيزا واحدة',
         btn_subscribe: '💎 الاشتراكات',
         btn_my_campaigns: '📋 حملاي النشطة',
         cancel_btn: '❌ إلغاء',
-        btn_copy_full: '📋 نسخ كاملة',
-        enter_bin: '📌 أرسل الـ BIN:',
-        live_result: '✅ تعمل بنجاح ✅\n\n💳 {card}\n📊 الحالة: LIVE\n🏦 النوع: {type}\n🌍 البلد: {country} {flag}',
-        single_checking: '⏳ جاري الفحص...',
-        subscription_plans: '💎 *خطط الاشتراك*:',
-        payment_received: '📸 تم استلام الإثبات وتثبيته، سيتم الرد قريباً.',
-        payment_approved: '🎉 تم تفعيل العضوية بنجاح!',
-        payment_rejected: '❌ تم رفض الإثبات.',
-        no_active_campaigns: '⚠️ لا توجد حملات جارية.',
-        active_campaigns: '📋 حملاتك الجارية:',
-        count_out_of_range: '⚠️ الحد الأقصى هو {max}.',
-        campaigns_limit_reached: '⚠️ وصلت للحد الأقصى.'
+        btn_copy_full: '📋 نسخ الفيزا كاملة',
+        btn_copy_num: '🔢 نسخ الرقم',
+        btn_copy_exp: '📅 نسخ التاريخ',
+        btn_copy_cvv: '🔐 نسخ CVV',
+        enter_bin: '📌 أرسل الـ BIN الخاص بك (أول 6 أرقام أو أكثر)\nمثال: `62581`\nيمكنك إرسال عدة BINs',
+        count_out_of_range: '⚠️ العدد يجب أن يكون بين 5 و {max}.',
+        cancel_msg: '❌ تم إلغاء العملية.',
+        live_result: '✅ تعمل بنجاح ✅\n----------------------------------------\n\n💳    {card}\n\n📊 الحالة: تعمل ✅\n\n🏦 النوع: {type}\n\n🌍 البلد: {country} {flag}\n\n----------------------------------------\nبواسطة: @pe8bot',
+        no_live_found: '😞 لم يتم العثور على أي بطاقة صالحة من أصل {total}.',
+        new_campaign_btn: '🚀 بدأ حملة جديدة',
+        summary: '📊 *الملخص النهائي*\n✅ الصالحة: {hit}\n🎯 المجموع: {total}',
+        single_invalid: '📌 أرسل الفيزا كاملة بهذا التنسيق:\n`4111111111111111|01|2031|123`',
+        single_checking: '⏳ جاري فحص البطاقة...',
+        api_error: '⚠️ حدث خطأ أثناء الاتصال بالخدمة.',
+        not_admin: '⛔ هذا الأمر للأدمن فقط.',
+        subscription_plans: '💎 *خطط الاشتراك*\nاختر الخطة لمعرفة التفاصيل:',
+        already_subscribed: '✅ أنت مشترك بالفعل في خطة {plan}.',
+        upgrade_to_pro: '🚀 تطوير إلى Pro',
+        upgrade_to_vip: '🚀 تطوير إلى VIP',
+        upgrade_suggestion: 'يمكنك ترقية اشتراكك الآن:',
+        payment_received: '📸 تم استلام الصورة وتثبيتها. سيتم مراجعتها قريباً من الإدارة.',
+        payment_approved: '🎉 تم تفعيل اشتراكك بنجاح!',
+        payment_rejected: '❌ تم رفض طلب الاشتراك، يرجى مراجعة الدعم.',
+        campaigns_limit_reached: '⚠️ لقد وصلت للحد الأقصى للحملات المتزامنة ({limit}).',
+        campaign_stopped: '🛑 تم إيقاف الحملة {id}.',
+        no_active_campaigns: '⚠️ لا توجد حملات نشطة.',
+        active_campaigns: '📋 *حملاي النشطة*\n'
     },
     en: {
-        main_menu: '✨ *Main Menu* ✨',
-        btn_guess: '🎲 Guess Cards',
-        btn_single: '🔍 Check Single',
-        btn_subscribe: '💎 Subscription',
-        btn_my_campaigns: '📋 Active Campaigns',
+        main_menu: '✨ *Main Menu* ✨\nChoose an option:',
+        btn_guess: '🎲 Guess multiple cards',
+        btn_single: '🔍 Check single card',
+        btn_subscribe: '💎 Subscriptions',
+        btn_my_campaigns: '📋 My active campaigns',
         cancel_btn: '❌ Cancel',
-        btn_copy_full: '📋 Copy All',
-        enter_bin: '📌 Send BIN:',
-        live_result: '✅ LIVE ✅\n\n💳 {card}\n📊 Status: LIVE\n🏦 Type: {type}\n🌍 Country: {country} {flag}',
-        single_checking: '⏳ Checking...',
-        subscription_plans: '💎 *Subscription Plans*:',
-        payment_received: '📸 Proof received and pinned, review pending.',
-        payment_approved: '🎉 Membership activated!',
-        payment_rejected: '❌ Proof rejected.',
+        btn_copy_full: '📋 Copy full card',
+        btn_copy_num: '🔢 Copy number',
+        btn_copy_exp: '📅 Copy expiry',
+        btn_copy_cvv: '🔐 Copy CVV',
+        enter_bin: '📌 Send your BIN (first 6 digits or more)\nExample: `62581`\nYou can send multiple BINs',
+        count_out_of_range: '⚠️ Count must be between 5 and {max}.',
+        cancel_msg: '❌ Operation cancelled.',
+        live_result: '✅ LIVE ✅\n----------------------------------------\n\n💳    {card}\n\n📊 Status: LIVE ✅\n\n🏦 Type: {type}\n\n🌍 Country: {country} {flag}\n\n----------------------------------------\nBy: @pe8bot',
+        no_live_found: '😞 No live cards found out of {total}.',
+        new_campaign_btn: '🚀 Start new campaign',
+        summary: '📊 *Final Summary*\n✅ Live: {hit}\n🎯 Total: {total}',
+        single_invalid: '📌 Send the full card in this format:\n`4111111111111111|01|2031|123`',
+        single_checking: '⏳ Checking card...',
+        api_error: '⚠️ API error. Please try again later.',
+        not_admin: '⛔ This command is for admins only.',
+        subscription_plans: '💎 *Subscription Plans*\nChoose your plan to see details:',
+        already_subscribed: '✅ You are already subscribed to {plan} plan.',
+        upgrade_to_pro: '🚀 Upgrade to Pro',
+        upgrade_to_vip: '🚀 Upgrade to VIP',
+        upgrade_suggestion: 'You can upgrade your subscription now:',
+        payment_received: '📸 Payment proof received and pinned. It will be reviewed soon.',
+        payment_approved: '🎉 Your subscription has been activated!',
+        payment_rejected: '❌ Subscription request rejected, contact support.',
+        campaigns_limit_reached: '⚠️ You have reached the maximum concurrent campaigns ({limit}).',
+        campaign_stopped: '🛑 Campaign {id} stopped.',
         no_active_campaigns: '⚠️ No active campaigns.',
-        active_campaigns: '📋 Your Campaigns:',
-        count_out_of_range: '⚠️ Max limit is {max}.',
-        campaigns_limit_reached: '⚠️ Limit reached.'
+        active_campaigns: '📋 *Your active campaigns*\n'
     }
 };
